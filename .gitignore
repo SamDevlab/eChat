@@ -7,4 +7,4 @@ coverage/
 .local-reference/
 apps/api/data/
 .vite/
-
+*.tsbuildinfo
