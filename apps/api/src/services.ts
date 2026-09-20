@@ -1,71 +1,121 @@
-import { createHash } from "node:crypto";
-import { assignConversationSchema, createOpportunitySchema, moveOpportunitySchema, sendMessageSchema, updateConversationStatusSchema, type OpportunityStage, type Role, type SessionUser } from "@echat/shared";
-import type { MessagingProvider, NormalizedWebhookEvent } from "@echat/shared";
+import { createHash, randomBytes } from "node:crypto";
+import { assignConversationSchema, createOpportunitySchema, loginSchema, moveOpportunitySchema, roleSchema, sendMessageSchema, updateConversationStatusSchema, type Role, type SessionUser } from "@echat/shared";
+import type { MessagingProvider } from "@echat/shared";
+import { hashPassword, hashSessionToken, verifyPassword } from "./auth.js";
+import { decryptSecret, encryptSecret } from "./crypto.js";
+import { ChatwootProvider, type IntegrationMessagingProvider, MockMessagingProvider } from "./providers.js";
 import { Repositories } from "./repositories.js";
+import { sanitizedProviderError, validateBaseUrl } from "./security.js";
 
 export class DomainError extends Error { constructor(public readonly status: number, message: string) { super(message); } }
+const canManage = (role: Role) => role === "OWNER" || role === "ADMIN";
 const canManageCrm = (role: Role) => role === "OWNER" || role === "ADMIN" || role === "AGENT";
+const inviteRole = (value: unknown): Role => roleSchema.parse(value);
+const iso = (value: Date | null | undefined): string | null => value ? value.toISOString() : null;
 
 export class DomainServices {
-  constructor(private readonly repositories: Repositories, private readonly provider: MessagingProvider) {}
+  constructor(private readonly repositories: Repositories, private readonly provider: MessagingProvider = new MockMessagingProvider()) {}
 
   async bootstrap(user: SessionUser) {
-    const [organization, users, contacts, channels, conversations, stages, opportunities] = await Promise.all([
-      this.repositories.getOrganization(user.organizationId), this.repositories.listUsers(user.organizationId), this.repositories.listContacts(user.organizationId), this.repositories.listChannels(user.organizationId), this.repositories.listConversations(user.organizationId), this.repositories.listStages(user.organizationId), this.repositories.listOpportunities(user.organizationId),
+    const [organization, users, contacts, channels, conversations, stages, opportunities, members, invites, integrations] = await Promise.all([
+      this.repositories.getOrganization(user.organizationId), this.repositories.listUsers(user.organizationId), this.repositories.listContacts(user.organizationId), this.repositories.listChannels(user.organizationId), this.repositories.listConversations(user.organizationId), this.repositories.listStages(user.organizationId), this.repositories.listOpportunities(user.organizationId), this.repositories.listMembers(user.organizationId), this.repositories.listInvites(user.organizationId), this.repositories.listIntegrations(user.organizationId),
     ]);
-    return { organization, user, users, contacts, channels, conversations, stages, opportunities };
+    return { organization, user, users, contacts, channels, conversations, stages, opportunities, members, invites: invites.map(this.publicInvite), integrations: integrations.map(this.publicIntegration) };
   }
 
+  private publicInvite(invite: any) { return { id: invite.id, organizationId: invite.organizationId, email: invite.email, role: invite.role, expiresAt: invite.expiresAt, acceptedAt: invite.acceptedAt, revokedAt: invite.revokedAt, createdAt: invite.createdAt }; }
+  private publicIntegration(integration: any) { return { id: integration.id, organizationId: integration.organizationId, provider: integration.provider, displayName: integration.displayName, externalAccountId: integration.externalAccountId, status: integration.status, baseUrl: integration.baseUrl, webhookRegistrationId: integration.webhookRegistrationId, lastCheckAt: iso(integration.lastCheckAt), lastErrorCode: integration.lastErrorCode, lastSyncStartedAt: iso(integration.lastSyncStartedAt), lastSyncCompletedAt: iso(integration.lastSyncCompletedAt), lastSyncStatus: integration.lastSyncStatus, lastSyncError: integration.lastSyncError }; }
+
   listContacts(user: SessionUser) { return this.repositories.listContacts(user.organizationId); }
+  searchContacts(user: SessionUser, query: string, page = 1, pageSize = 25) { return this.repositories.searchContacts(user.organizationId, query, page, pageSize); }
   listConversations(user: SessionUser) { return this.repositories.listConversations(user.organizationId); }
-  listOpportunities(user: SessionUser) { return this.repositories.listOpportunities(user.organizationId); }
+  searchConversations(user: SessionUser, input: { query?: string; status?: string; assignedToId?: string; channelId?: string; page?: number; pageSize?: number }) { return this.repositories.searchConversations(user.organizationId, { ...input, assignedToId: input.assignedToId === "mine" ? user.id : input.assignedToId }); }
   getConversation(user: SessionUser, id: string) { return this.repositories.getConversation(user.organizationId, id).then((value) => { if (!value) throw new DomainError(404, "Conversa não encontrada"); return value; }); }
+  listMembers(user: SessionUser) { return this.repositories.listMembers(user.organizationId); }
+  listInvites(user: SessionUser) { return this.repositories.listInvites(user.organizationId).then((items) => items.map(this.publicInvite)); }
+  listIntegrations(user: SessionUser) { return this.repositories.listIntegrations(user.organizationId).then((items) => items.map(this.publicIntegration)); }
+
+  async signup(input: { name: string; email: string; password: string; organizationName: string; session: { id: string; tokenHash: string; expiresAt: Date } }) {
+    if (input.password.length < 8) throw new DomainError(422, "A senha deve ter pelo menos 8 caracteres");
+    if (!input.name.trim() || input.organizationName.trim().length < 2) throw new DomainError(422, "Nome e empresa são obrigatórios");
+    try { return await this.repositories.createOrganizationWithOwner({ name: input.organizationName.trim(), email: input.email.toLowerCase(), userName: input.name.trim(), passwordHash: hashPassword(input.password), session: input.session }); } catch (error) { if (String(error).includes("users_email_unique") || String(error).toLowerCase().includes("duplicate key")) throw new DomainError(409, "Email já cadastrado"); throw error; }
+  }
+
+  async updateOrganization(user: SessionUser, input: { name?: string; timezone?: string; onboardingStep?: string; onboardingCompleted?: boolean }) {
+    if (!canManage(user.role)) throw new DomainError(403, "Sem permissão para alterar a organização");
+    if (input.timezone) { try { new Intl.DateTimeFormat("en-US", { timeZone: input.timezone }).format(); } catch { throw new DomainError(422, "Timezone inválido"); } }
+    return this.repositories.updateOrganization(user.organizationId, input);
+  }
+
+  async createInvite(user: SessionUser, input: { email: string; role: unknown; appUrl: string }) {
+    if (!canManage(user.role)) throw new DomainError(403, "Sem permissão para convidar membros");
+    const role = inviteRole(input.role); const email = input.email.trim().toLowerCase(); if (!email.includes("@")) throw new DomainError(422, "Email inválido");
+    const token = randomBytes(32).toString("base64url"); const invite = await this.repositories.createInvite({ id: randomBytes(16).toString("hex"), organizationId: user.organizationId, email, role, tokenHash: hashSessionToken(token), expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), createdBy: user.id });
+    return { invite: this.publicInvite(invite), inviteUrl: `${input.appUrl.replace(/\/$/, "")}/invite/${token}` };
+  }
+
+  async revokeInvite(user: SessionUser, id: string) { if (!canManage(user.role)) throw new DomainError(403, "Sem permissão para revogar convites"); await this.repositories.revokeInvite(user.organizationId, id); return { ok: true }; }
+  async inviteInfo(token: string) { const invite = await this.repositories.findInviteByHash(hashSessionToken(token)); if (!invite || invite.acceptedAt || invite.revokedAt || invite.expiresAt <= new Date()) throw new DomainError(404, "Convite inválido ou expirado"); return { email: invite.email, role: invite.role, organizationId: invite.organizationId }; }
+
+  async acceptInvite(input: { token: string; name: string; password: string; session: { id: string; tokenHash: string; expiresAt: Date } }) {
+    const invite = await this.repositories.findInviteByHash(hashSessionToken(input.token)); if (!invite || invite.acceptedAt || invite.revokedAt || invite.expiresAt <= new Date()) throw new DomainError(404, "Convite inválido ou expirado");
+    const existing = await this.repositories.findUserByEmail(invite.email); let existingUserId: string | undefined; let passwordHash: string | undefined;
+    if (existing) { if (!verifyPassword(input.password, existing.passwordHash)) throw new DomainError(401, "Senha inválida para este email"); existingUserId = existing.id; } else { if (input.password.length < 8 || !input.name.trim()) throw new DomainError(422, "Nome e senha são obrigatórios"); passwordHash = hashPassword(input.password); }
+    const result = await this.repositories.acceptInviteAtomic({ tokenHash: hashSessionToken(input.token), name: input.name.trim(), passwordHash, existingUserId, session: input.session }); if (!result) throw new DomainError(404, "Convite inválido ou expirado"); return result;
+  }
+
+  async updateMember(user: SessionUser, memberUserId: string, input: { role?: unknown; status?: "ACTIVE" | "DISABLED" }) {
+    if (!canManage(user.role)) throw new DomainError(403, "Sem permissão para gerenciar membros"); const target = await this.repositories.getMember(user.organizationId, memberUserId); if (!target) throw new DomainError(404, "Membro não encontrado");
+    const nextRole = input.role === undefined ? target.role : inviteRole(input.role); const disablingOwner = target.role === "OWNER" && target.status === "ACTIVE" && (nextRole !== "OWNER" || input.status === "DISABLED");
+    if (disablingOwner && await this.repositories.countActiveOwners(user.organizationId) <= 1) throw new DomainError(422, "A organização precisa manter um Owner ativo");
+    return this.repositories.updateMember(user.organizationId, memberUserId, { role: nextRole, status: input.status });
+  }
 
   async assignConversation(user: SessionUser, id: string, input: unknown) {
     const payload = assignConversationSchema.parse(input); const conversation = await this.repositories.getConversationRow(user.organizationId, id); if (!conversation) throw new DomainError(404, "Conversa não encontrada");
-    if (payload.assignedToId) {
-      const target = await this.repositories.findMember(user.organizationId, payload.assignedToId); if (!target) throw new DomainError(404, "Atendente não encontrado");
-      const targetRole = target.member.role as Role; if (user.role === "AGENT" && targetRole !== "AGENT" && payload.assignedToId !== user.id) throw new DomainError(403, "Agente não pode gerenciar Owner ou Admin");
-    }
+    if (payload.assignedToId) { const target = await this.repositories.findMember(user.organizationId, payload.assignedToId); if (!target) throw new DomainError(404, "Atendente ativo não encontrado"); const targetRole = target.member.role as Role; if (user.role === "AGENT" && targetRole !== "AGENT" && payload.assignedToId !== user.id) throw new DomainError(403, "Agente não pode gerenciar Owner ou Admin"); }
     const result = await this.repositories.updateConversationAssignment(user.organizationId, id, payload.assignedToId ?? null); if (!result) throw new DomainError(404, "Conversa não encontrada"); return result.conversation;
   }
+  async updateConversationStatus(user: SessionUser, id: string, input: unknown) { const payload = updateConversationStatusSchema.parse(input); const result = await this.repositories.updateConversationStatus(user.organizationId, id, payload.status); if (!result) throw new DomainError(404, "Conversa não encontrada"); return result.conversation; }
 
-  async updateConversationStatus(user: SessionUser, id: string, input: unknown) {
-    const payload = updateConversationStatusSchema.parse(input); const result = await this.repositories.updateConversationStatus(user.organizationId, id, payload.status); if (!result) throw new DomainError(404, "Conversa não encontrada"); return result.conversation;
+  private async providerForIntegration(organizationId: string, integrationId: string): Promise<MessagingProvider> {
+    const integration = await this.repositories.getIntegration(organizationId, integrationId); if (!integration) throw new DomainError(404, "Integração não encontrada");
+    if (integration.provider === "mock") return this.provider;
+    if (!integration.baseUrl || !integration.credentialCiphertext || !integration.credentialIv || !integration.credentialTag || !integration.credentialVersion) throw new DomainError(422, "Credencial da integração não configurada");
+    try { const token = decryptSecret({ ciphertext: integration.credentialCiphertext, iv: integration.credentialIv, tag: integration.credentialTag, version: integration.credentialVersion }); let webhookSecret: string | undefined; if (integration.webhookSecretCiphertext && integration.webhookSecretIv && integration.webhookSecretTag && integration.webhookSecretVersion) webhookSecret = decryptSecret({ ciphertext: integration.webhookSecretCiphertext, iv: integration.webhookSecretIv, tag: integration.webhookSecretTag, version: integration.webhookSecretVersion }); return new ChatwootProvider({ baseUrl: integration.baseUrl, token, accountId: integration.externalAccountId, webhookSecret }); } catch { throw new DomainError(422, "Não foi possível descriptografar a credencial da integração"); }
   }
+  async providerForWebhook(organizationId: string, integrationId: string) { return this.providerForIntegration(organizationId, integrationId); }
 
   async sendMessage(user: SessionUser, conversationId: string, input: unknown) {
-    const payload = sendMessageSchema.parse(input); const conversation = await this.repositories.getConversationRow(user.organizationId, conversationId); if (!conversation) throw new DomainError(404, "Conversa não encontrada");
-    let external: Awaited<ReturnType<MessagingProvider["sendMessage"]>>;
-    try { external = await this.provider.sendMessage({ conversationId, externalConversationId: conversation.externalId ?? undefined, body: payload.body, internal: payload.internal }); } catch (error) { throw new DomainError(502, error instanceof Error ? error.message : "Falha no provider de mensagens"); }
+    const payload = sendMessageSchema.parse(input); const conversation = await this.repositories.getConversationRow(user.organizationId, conversationId); if (!conversation) throw new DomainError(404, "Conversa não encontrada"); const integrations = await this.repositories.listIntegrations(user.organizationId); const active = integrations.find((item) => item.provider === "chatwoot" && item.status === "CONNECTED"); const provider = active ? await this.providerForIntegration(user.organizationId, active.id) : this.provider;
+    let external: Awaited<ReturnType<MessagingProvider["sendMessage"]>>; try { external = await provider.sendMessage({ conversationId, externalConversationId: conversation.externalId ?? undefined, body: payload.body, internal: payload.internal }); } catch (error) { throw new DomainError(502, error instanceof Error ? error.message : "Falha no provider de mensagens"); }
     return this.repositories.insertOutgoingMessage({ organizationId: user.organizationId, conversationId, externalId: external.externalId, body: external.body, authorName: user.name, createdAt: new Date(external.createdAt), internal: payload.internal });
   }
 
-  async createOpportunity(user: SessionUser, input: unknown) {
-    if (!canManageCrm(user.role)) throw new DomainError(403, "Sem permissão para criar oportunidade");
-    const payload = createOpportunitySchema.parse(input); const result = await this.repositories.createOpportunity({ organizationId: user.organizationId, actorId: user.id, title: payload.title, contactId: payload.contactId, value: payload.value, stageKey: payload.stage }); if (!result) throw new DomainError(422, "Contato ou etapa inválida para esta organização"); return result;
+  async createOpportunity(user: SessionUser, input: unknown) { if (!canManageCrm(user.role)) throw new DomainError(403, "Sem permissão para criar oportunidade"); const payload = createOpportunitySchema.parse(input); const result = await this.repositories.createOpportunity({ organizationId: user.organizationId, actorId: user.id, title: payload.title, contactId: payload.contactId, value: payload.value, stageKey: payload.stage }); if (!result) throw new DomainError(422, "Contato ou etapa inválida para esta organização"); if (typeof input === "object" && input && "conversationId" in input && typeof input.conversationId === "string") await this.repositories.linkOpportunityConversation({ organizationId: user.organizationId, opportunityId: result.id, conversationId: input.conversationId }); return result; }
+  async linkOpportunityConversation(user: SessionUser, opportunityId: string, conversationId: string) { if (!canManageCrm(user.role)) throw new DomainError(403, "Sem permissão para vincular oportunidade"); const result = await this.repositories.linkOpportunityConversation({ organizationId: user.organizationId, opportunityId, conversationId }); if (!result) throw new DomainError(404, "Oportunidade ou conversa não encontrada"); return result; }
+  async moveOpportunity(user: SessionUser, id: string, input: unknown) { if (!canManageCrm(user.role)) throw new DomainError(403, "Sem permissão para mover oportunidade"); const payload = moveOpportunitySchema.parse(input); const result = await this.repositories.moveOpportunity({ organizationId: user.organizationId, actorId: user.id, opportunityId: id, stageKey: payload.stage }); if (result === null) throw new DomainError(404, "Oportunidade não encontrada"); if (result === undefined) throw new DomainError(422, "Etapa inválida para esta organização"); return result; }
+
+  async saveIntegration(user: SessionUser, input: { id?: string; provider: string; displayName: string; baseUrl: string; externalAccountId: string; apiToken: string; webhookSecret?: string }) {
+    if (!canManage(user.role)) throw new DomainError(403, "Sem permissão para configurar integrações"); if (input.provider !== "chatwoot" && input.provider !== "mock") throw new DomainError(422, "Provider não suportado"); let baseUrl: string; try { baseUrl = validateBaseUrl(input.baseUrl); } catch (error) { throw new DomainError(422, error instanceof Error ? error.message : "Base URL inválida"); }
+    const encrypted = input.provider === "chatwoot" ? encryptSecret(input.apiToken) : { ciphertext: "", iv: "", tag: "", version: 1 }; const webhook = input.webhookSecret ? encryptSecret(input.webhookSecret) : undefined; const integration = await this.repositories.saveIntegration({ id: input.id ?? `integration-${randomBytes(12).toString("hex")}`, organizationId: user.organizationId, provider: input.provider, displayName: input.displayName.trim() || "Chatwoot", externalAccountId: input.externalAccountId.trim(), baseUrl, credentialCiphertext: encrypted.ciphertext, credentialIv: encrypted.iv, credentialTag: encrypted.tag, credentialVersion: encrypted.version, webhookSecretCiphertext: webhook?.ciphertext, webhookSecretIv: webhook?.iv, webhookSecretTag: webhook?.tag, webhookSecretVersion: webhook?.version });
+    if (!(await this.repositories.listChannels(user.organizationId)).some((channel) => channel.integrationAccountId === integration.id)) await this.repositories.upsertSyncedChannel({ organizationId: user.organizationId, integrationAccountId: integration.id, externalId: `integration-${integration.id}`, name: integration.displayName, type: "WEBCHAT" }); return this.publicIntegration(integration);
   }
 
-  async moveOpportunity(user: SessionUser, id: string, input: unknown) {
-    if (!canManageCrm(user.role)) throw new DomainError(403, "Sem permissão para mover oportunidade");
-    const payload = moveOpportunitySchema.parse(input); const result = await this.repositories.moveOpportunity({ organizationId: user.organizationId, actorId: user.id, opportunityId: id, stageKey: payload.stage }); if (result === null) throw new DomainError(404, "Oportunidade não encontrada"); if (result === undefined) throw new DomainError(422, "Etapa inválida para esta organização"); return result;
+  async testIntegration(user: SessionUser, id: string) { if (!canManage(user.role)) throw new DomainError(403, "Sem permissão para testar integrações"); const integration = await this.repositories.getIntegration(user.organizationId, id); if (!integration) throw new DomainError(404, "Integração não encontrada"); try { const provider = await this.providerForIntegration(user.organizationId, id) as IntegrationMessagingProvider; const result = provider.testConnection ? await provider.testConnection() : { accountId: integration.externalAccountId }; if (result.accountId !== integration.externalAccountId) throw new Error("ACCOUNT_MISMATCH");
+    const publicUrl = process.env.PUBLIC_APP_URL ?? process.env.APP_URL;
+    let webhookRegistrationId = integration.webhookRegistrationId;
+    if (provider.registerWebhook && publicUrl && !/localhost|127\.0\.0\.1/i.test(publicUrl)) webhookRegistrationId = (await provider.registerWebhook(`${publicUrl.replace(/\/$/, "")}/api/v1/webhooks/chatwoot`)).id;
+    const updated = await this.repositories.updateIntegration(user.organizationId, id, { status: "CONNECTED", lastCheckAt: new Date(), lastErrorCode: null, webhookRegistrationId }); return { integration: this.publicIntegration(updated), result: { ok: true, accountId: result.accountId, name: result.name } }; } catch (error) { const rawStatus = Number((error as { status?: number }).status ?? 0); const code = sanitizedProviderError(rawStatus, error instanceof Error ? error.message : ""); await this.repositories.updateIntegration(user.organizationId, id, { status: "ERROR", lastCheckAt: new Date(), lastErrorCode: code }); throw new DomainError(502, `Teste de conexão falhou: ${code}`); } }
+  async deleteIntegration(user: SessionUser, id: string) { if (!canManage(user.role)) throw new DomainError(403, "Sem permissão para remover integrações"); const integration = await this.repositories.getIntegration(user.organizationId, id); if (!integration) throw new DomainError(404, "Integração não encontrada"); await this.repositories.deleteIntegration(user.organizationId, id); return { ok: true }; }
+
+  async syncIntegration(user: SessionUser, id: string) {
+    if (!canManage(user.role)) throw new DomainError(403, "Sem permissão para sincronizar integrações"); const integration = await this.repositories.getIntegration(user.organizationId, id); if (!integration) throw new DomainError(404, "Integração não encontrada"); const provider = await this.providerForIntegration(user.organizationId, id) as IntegrationMessagingProvider; if (!provider.listContacts || !provider.listConversationsWithMessages) throw new DomainError(422, "Provider não suporta sincronização"); await this.repositories.updateIntegration(user.organizationId, id, { lastSyncStartedAt: new Date(), lastSyncStatus: "RUNNING", lastSyncError: null });
+    try { const owner = await this.repositories.findAnyActiveMember(user.organizationId); if (!owner) throw new Error("OWNER_NOT_FOUND"); const contactsByExternalId = new Map<string, string>(); for (let page = 1; page <= 10; page += 1) { const result = await provider.listContacts(page); for (const contact of result.items) { const synced = await this.repositories.upsertSyncedContact({ organizationId: user.organizationId, externalId: contact.externalId, name: contact.name, email: contact.email, phone: contact.phone, ownerId: owner.userId }); contactsByExternalId.set(contact.externalId, synced.id); } if (!result.hasNextPage) break; } let imported = 0; for (let page = 1; page <= 10; page += 1) { const result = await provider.listConversationsWithMessages(page); for (const conversation of result.items) { const contactId = contactsByExternalId.get(conversation.contactExternalId) ?? (await this.repositories.upsertSyncedContact({ organizationId: user.organizationId, externalId: conversation.contactExternalId, name: "Contato Chatwoot", email: "", phone: "", ownerId: owner.userId })).id; const channel = await this.repositories.upsertSyncedChannel({ organizationId: user.organizationId, integrationAccountId: id, externalId: conversation.channelExternalId, name: conversation.channelName, type: conversation.channelType }); const conversationId = await this.repositories.upsertSyncedConversation({ organizationId: user.organizationId, externalId: conversation.externalId, contactId, channelId: channel.id, status: conversation.status, assignedToId: undefined, lastMessage: conversation.lastMessage, lastMessageAt: new Date(conversation.lastMessageAt) }); for (const message of conversation.messages) await this.repositories.upsertSyncedMessage({ organizationId: user.organizationId, conversationId, externalId: message.externalId, sender: message.sender, authorName: message.authorName, body: message.body, createdAt: new Date(message.createdAt), internal: message.internal }); imported += 1; } if (!result.hasNextPage) break; } const updated = await this.repositories.updateIntegration(user.organizationId, id, { lastSyncCompletedAt: new Date(), lastSyncStatus: "SUCCESS", status: "CONNECTED", lastSyncError: null }); return { integration: this.publicIntegration(updated), imported }; } catch { await this.repositories.updateIntegration(user.organizationId, id, { lastSyncStatus: "FAILED", lastSyncError: "SYNC_FAILED" }); throw new DomainError(502, "Sincronização falhou; dados anteriores foram preservados"); }
   }
 
-  async processWebhook(input: { integrationAccountId: string; organizationId: string; provider: string; eventId: string; rawBody: string; payload: unknown }): Promise<{ processed: boolean; duplicate: boolean }> {
-    if (!input.eventId) throw new DomainError(400, "Evento sem idempotency key");
-    const events = this.provider.normalizeWebhook?.(input.payload); if (!events) throw new DomainError(422, "Provider não suporta webhook");
-    const claimed = await this.repositories.claimWebhookEvent({ organizationId: input.organizationId, integrationAccountId: input.integrationAccountId, provider: input.provider, externalEventId: input.eventId, payloadHash: createHash("sha256").update(input.rawBody).digest("hex") });
-    if (!claimed) return { processed: false, duplicate: true };
-    try {
-      for (const event of events) await this.persistWebhookEvent(input.organizationId, event);
-      await this.repositories.completeWebhookEvent(input.integrationAccountId, input.eventId);
-      return { processed: true, duplicate: false };
-    } catch (error) { throw error instanceof DomainError ? error : new DomainError(422, "Evento Chatwoot inválido"); }
+  async processWebhook(input: { integrationAccountId: string; organizationId: string; provider: string; eventId: string; rawBody: string; payload: unknown; providerInstance?: MessagingProvider }): Promise<{ processed: boolean; duplicate: boolean }> {
+    if (!input.eventId) throw new DomainError(400, "Evento sem idempotency key"); const provider = input.providerInstance ?? await this.providerForIntegration(input.organizationId, input.integrationAccountId); const events = provider.normalizeWebhook?.(input.payload); if (!events) throw new DomainError(422, "Provider não suporta webhook"); const claimed = await this.repositories.claimWebhookEvent({ organizationId: input.organizationId, integrationAccountId: input.integrationAccountId, provider: input.provider, externalEventId: input.eventId, payloadHash: createHash("sha256").update(input.rawBody).digest("hex") }); if (!claimed) return { processed: false, duplicate: true }; try { for (const event of events) await this.persistWebhookEvent(input.organizationId, event); await this.repositories.completeWebhookEvent(input.integrationAccountId, input.eventId); return { processed: true, duplicate: false }; } catch (error) { throw error instanceof DomainError ? error : new DomainError(422, "Evento Chatwoot inválido"); }
   }
-
-  private async persistWebhookEvent(organizationId: string, event: NormalizedWebhookEvent) {
-    const conversation = await this.repositories.findConversationByExternalId(organizationId, event.externalConversationId); if (!conversation) throw new DomainError(404, "Conversa externa não encontrada");
-    if (event.externalMessageId && await this.repositories.findMessageByExternalId(organizationId, event.externalMessageId)) return;
-    if (event.sender === "CONTACT") await this.repositories.insertInboundMessage({ organizationId, conversationId: conversation.id, externalId: event.externalMessageId, body: event.body, authorName: event.authorName, createdAt: new Date(event.createdAt) });
-  }
+  private async persistWebhookEvent(organizationId: string, event: any) { const conversation = await this.repositories.findConversationByExternalId(organizationId, event.externalConversationId); if (!conversation) throw new DomainError(404, "Conversa externa não encontrada"); if (event.externalMessageId && await this.repositories.findMessageByExternalId(organizationId, event.externalMessageId)) return; if (event.sender === "CONTACT") await this.repositories.insertInboundMessage({ organizationId, conversationId: conversation.id, externalId: event.externalMessageId, body: event.body, authorName: event.authorName, createdAt: new Date(event.createdAt) }); }
 }

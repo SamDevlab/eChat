@@ -1,7 +1,7 @@
-import { and, desc, eq, gt, inArray, isNull } from "drizzle-orm";
+import { and, count, desc, eq, gt, ilike, inArray, isNull, or } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { Database } from "@echat/db";
-import { authSessions, channels, contactTags, contacts, conversations, integrationAccounts, messages, opportunities, opportunityActivities, organizationMembers, organizations, pipelineStages, pipelines, tags, users, webhookEvents } from "@echat/db";
+import { authSessions, channels, contactTags, contacts, conversations, integrationAccounts, messages, opportunities, opportunityActivities, organizationInvites, opportunityConversations, organizationMembers, organizations, pipelineStages, pipelines, tags, users, webhookEvents } from "@echat/db";
 import type { Contact, Conversation, Message, Opportunity, OpportunityStage, PipelineStage, Role, SessionUser, User } from "@echat/shared";
 
 const role = (value: string): Role => value === "OWNER" || value === "ADMIN" ? value : "AGENT";
@@ -9,12 +9,13 @@ const stageKey = (value: string): OpportunityStage => value as OpportunityStage;
 const iso = (value: Date | string): string => value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 
 export type AuthenticatedRecord = { sessionId: string; user: SessionUser; expiresAt: Date };
-export type IntegrationRecord = { id: string; organizationId: string; provider: string; externalAccountId: string; status: string; baseUrl: string | null; credentialRef: string | null };
+export type IntegrationRecord = { id: string; organizationId: string; provider: string; displayName: string; externalAccountId: string; status: string; baseUrl: string | null; credentialRef: string | null; credentialCiphertext: string | null; credentialIv: string | null; credentialTag: string | null; credentialVersion: number | null; webhookSecretCiphertext: string | null; webhookSecretIv: string | null; webhookSecretTag: string | null; webhookSecretVersion: number | null; webhookRegistrationId: string | null; lastCheckAt: Date | null; lastErrorCode: string | null; lastSyncStartedAt: Date | null; lastSyncCompletedAt: Date | null; lastSyncStatus: string | null; lastSyncError: string | null };
 
 const toUser = (row: { id: string; name: string; email: string; avatar: string }, organizationId: string, membershipRole: string): User => ({ id: row.id, organizationId, name: row.name, email: row.email, role: role(membershipRole), avatar: row.avatar });
 const toContact = (row: typeof contacts.$inferSelect, tagNames: string[], opportunityCount: number): Contact => ({ id: row.id, organizationId: row.organizationId, name: row.name, company: row.company, phone: row.phone, email: row.email, tags: tagNames, ownerId: row.ownerId, lastConversationAt: iso(row.lastConversationAt), opportunities: opportunityCount, notes: row.notes });
 const toMessage = (row: typeof messages.$inferSelect): Message => ({ id: row.id, organizationId: row.organizationId, externalId: row.externalId ?? undefined, conversationId: row.conversationId, sender: row.sender as Message["sender"], authorName: row.authorName, body: row.body, createdAt: iso(row.createdAt), internal: row.internal });
 const toStage = (row: typeof pipelineStages.$inferSelect): PipelineStage => ({ id: row.id, organizationId: row.organizationId, name: row.name, key: stageKey(row.key), order: row.position, color: row.color });
+const toIntegration = (row: typeof integrationAccounts.$inferSelect): IntegrationRecord => ({ id: row.id, organizationId: row.organizationId, provider: row.provider, displayName: row.displayName, externalAccountId: row.externalAccountId, status: row.status, baseUrl: row.baseUrl, credentialRef: row.credentialRef, credentialCiphertext: row.credentialCiphertext, credentialIv: row.credentialIv, credentialTag: row.credentialTag, credentialVersion: row.credentialVersion, webhookSecretCiphertext: row.webhookSecretCiphertext, webhookSecretIv: row.webhookSecretIv, webhookSecretTag: row.webhookSecretTag, webhookSecretVersion: row.webhookSecretVersion, webhookRegistrationId: row.webhookRegistrationId, lastCheckAt: row.lastCheckAt, lastErrorCode: row.lastErrorCode, lastSyncStartedAt: row.lastSyncStartedAt, lastSyncCompletedAt: row.lastSyncCompletedAt, lastSyncStatus: row.lastSyncStatus, lastSyncError: row.lastSyncError });
 
 export class Repositories {
   constructor(private readonly db: Database) {}
@@ -42,13 +43,44 @@ export class Repositories {
   async getOrganization(organizationId: string) {
     const row = (await this.db.select().from(organizations).where(eq(organizations.id, organizationId)).limit(1))[0];
     if (!row) throw new Error("Organização não encontrada");
-    return { id: row.id, name: row.name, plan: row.plan };
+    return { id: row.id, name: row.name, plan: row.plan, timezone: row.timezone, onboardingStep: row.onboardingStep, onboardingCompleted: row.onboardingCompleted };
+  }
+
+  async createOrganizationWithOwner(input: { name: string; email: string; passwordHash: string; userName: string; session: { id: string; tokenHash: string; expiresAt: Date } }) {
+    return this.db.transaction(async (tx) => {
+      const organizationId = randomUUID(); const userId = randomUUID(); const pipelineId = `${organizationId}-pipeline-default`;
+      await tx.insert(organizations).values({ id: organizationId, name: input.name, plan: "Plano piloto", timezone: "America/Sao_Paulo", onboardingStep: "COMPANY", onboardingCompleted: false });
+      await tx.insert(users).values({ id: userId, email: input.email, name: input.userName, passwordHash: input.passwordHash, avatar: input.userName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase() || "OW" });
+      await tx.insert(organizationMembers).values({ id: randomUUID(), organizationId, userId, role: "OWNER", status: "ACTIVE" });
+      await tx.insert(pipelines).values({ id: pipelineId, organizationId, name: "Vendas" });
+      const stages = [{ key: "NEW_LEAD", name: "Novo lead", color: "teal" }, { key: "CONTACTED", name: "Contato realizado", color: "blue" }, { key: "PROPOSAL", name: "Proposta", color: "violet" }, { key: "NEGOTIATION", name: "Negociação", color: "amber" }, { key: "WON", name: "Ganho", color: "green" }, { key: "LOST", name: "Perdido", color: "red" }];
+      for (const [index, stage] of stages.entries()) await tx.insert(pipelineStages).values({ id: `${organizationId}-stage-${stage.key}`, organizationId, pipelineId, name: stage.name, key: stage.key, position: index + 1, color: stage.color });
+      await tx.insert(authSessions).values({ id: input.session.id, userId, organizationId, tokenHash: input.session.tokenHash, expiresAt: input.session.expiresAt });
+      return { organizationId, userId, pipelineId };
+    });
+  }
+
+  async updateOrganization(organizationId: string, input: { name?: string; timezone?: string; onboardingStep?: string; onboardingCompleted?: boolean }) {
+    await this.db.update(organizations).set({ ...input }).where(eq(organizations.id, organizationId));
+    return this.getOrganization(organizationId);
   }
 
   async listUsers(organizationId: string): Promise<User[]> {
     const rows = await this.db.select({ user: users, member: organizationMembers }).from(organizationMembers).innerJoin(users, eq(users.id, organizationMembers.userId)).where(and(eq(organizationMembers.organizationId, organizationId), eq(organizationMembers.status, "ACTIVE")));
     return rows.map(({ user, member }) => toUser(user, organizationId, member.role));
   }
+
+  async listMembers(organizationId: string) {
+    const rows = await this.db.select({ member: organizationMembers, user: users }).from(organizationMembers).innerJoin(users, eq(users.id, organizationMembers.userId)).where(eq(organizationMembers.organizationId, organizationId)).orderBy(organizationMembers.createdAt);
+    return rows.map(({ member, user }) => ({ id: member.id, organizationId, userId: user.id, name: user.name, email: user.email, avatar: user.avatar, role: role(member.role), status: member.status as "ACTIVE" | "INVITED" | "DISABLED", createdAt: iso(member.createdAt) }));
+  }
+
+  async getMember(organizationId: string, userId: string) { return (await this.listMembers(organizationId)).find((member) => member.userId === userId) ?? null; }
+  async countActiveOwners(organizationId: string) { return Number((await this.db.select({ count: count() }).from(organizationMembers).where(and(eq(organizationMembers.organizationId, organizationId), eq(organizationMembers.role, "OWNER"), eq(organizationMembers.status, "ACTIVE"))))[0]?.count ?? 0); }
+  async updateMember(organizationId: string, userId: string, input: { role?: Role; status?: "ACTIVE" | "DISABLED" }) { await this.db.update(organizationMembers).set(input).where(and(eq(organizationMembers.organizationId, organizationId), eq(organizationMembers.userId, userId))); return this.getMember(organizationId, userId); }
+
+  async findUserByEmail(email: string) { return (await this.db.select().from(users).where(eq(users.email, email.toLowerCase())).limit(1))[0] ?? null; }
+  async findAnyActiveMember(organizationId: string) { return (await this.db.select().from(organizationMembers).where(and(eq(organizationMembers.organizationId, organizationId), eq(organizationMembers.status, "ACTIVE"))).orderBy(organizationMembers.createdAt).limit(1))[0] ?? null; }
 
   private async tagMap(organizationId: string): Promise<Map<string, string[]>> {
     const rows = await this.db.select({ contactId: contactTags.contactId, name: tags.name }).from(contactTags).innerJoin(tags, eq(tags.id, contactTags.tagId)).where(eq(contactTags.organizationId, organizationId));
@@ -67,16 +99,35 @@ export class Repositories {
     return rows.map((row) => toContact(row, tagsByContact.get(row.id) ?? [], counts.get(row.id) ?? 0));
   }
 
+  async searchContacts(organizationId: string, query: string, page = 1, pageSize = 25) {
+    const normalized = query.trim(); const filter = normalized ? and(eq(contacts.organizationId, organizationId), or(ilike(contacts.name, `%${normalized}%`), ilike(contacts.company, `%${normalized}%`), ilike(contacts.email, `%${normalized}%`))) : eq(contacts.organizationId, organizationId);
+    const [rows, total] = await Promise.all([this.db.select().from(contacts).where(filter).orderBy(contacts.name).limit(pageSize).offset((page - 1) * pageSize), this.db.select({ count: count() }).from(contacts).where(filter)]);
+    const all = await this.listContacts(organizationId); const byId = new Map(all.map((item) => [item.id, item]));
+    return { items: rows.map((row) => byId.get(row.id)).filter((item): item is Contact => Boolean(item)), total: Number(total[0]?.count ?? 0), page, pageSize };
+  }
+
   async getContact(organizationId: string, contactId: string): Promise<Contact | null> { return (await this.listContacts(organizationId)).find((item) => item.id === contactId) ?? null; }
 
   async listChannels(organizationId: string) {
     const rows = await this.db.select().from(channels).where(eq(channels.organizationId, organizationId));
-    return rows.map((row) => ({ id: row.id, organizationId: row.organizationId, name: row.name, type: row.type as "WHATSAPP" | "WEBCHAT" | "EMAIL" | "INSTAGRAM", status: row.status as "CONNECTED" | "ATTENTION", conversations: row.conversations }));
+    return rows.map((row) => ({ id: row.id, organizationId: row.organizationId, integrationAccountId: row.integrationAccountId ?? undefined, name: row.name, type: row.type as "WHATSAPP" | "WEBCHAT" | "EMAIL" | "INSTAGRAM", status: row.status as "CONNECTED" | "ATTENTION", conversations: row.conversations }));
   }
 
   async listConversations(organizationId: string): Promise<Conversation[]> {
     const rows = await this.db.select().from(conversations).where(eq(conversations.organizationId, organizationId)).orderBy(desc(conversations.lastMessageAt));
     return this.withMessages(organizationId, rows);
+  }
+
+  async searchConversations(organizationId: string, input: { query?: string; status?: string; assignedToId?: string; channelId?: string; page?: number; pageSize?: number }) {
+    const page = input.page ?? 1; const pageSize = input.pageSize ?? 25; const filters = [eq(conversations.organizationId, organizationId)];
+    if (input.status && ["OPEN", "WAITING", "RESOLVED"].includes(input.status)) filters.push(eq(conversations.status, input.status));
+    if (input.assignedToId === "mine") filters.push(isNull(conversations.assignedToId));
+    if (input.assignedToId && input.assignedToId !== "mine" && input.assignedToId !== "unassigned") filters.push(eq(conversations.assignedToId, input.assignedToId));
+    if (input.assignedToId === "unassigned") filters.push(isNull(conversations.assignedToId));
+    if (input.channelId) filters.push(eq(conversations.channelId, input.channelId));
+    const normalized = input.query?.trim(); if (normalized) filters.push(or(ilike(conversations.lastMessage, `%${normalized}%`), ilike(conversations.externalId, `%${normalized}%`))!);
+    const where = and(...filters); const [rows, total] = await Promise.all([this.db.select().from(conversations).where(where).orderBy(desc(conversations.lastMessageAt)).limit(pageSize).offset((page - 1) * pageSize), this.db.select({ count: count() }).from(conversations).where(where)]);
+    return { items: await this.withMessages(organizationId, rows), total: Number(total[0]?.count ?? 0), page, pageSize };
   }
 
   private async withMessages(organizationId: string, rows: typeof conversations.$inferSelect[]): Promise<Conversation[]> {
@@ -148,10 +199,67 @@ export class Repositories {
     });
   }
 
-  async findIntegration(provider: string, externalAccountId: string): Promise<IntegrationRecord | null> {
-    const row = (await this.db.select().from(integrationAccounts).where(and(eq(integrationAccounts.provider, provider), eq(integrationAccounts.externalAccountId, externalAccountId), eq(integrationAccounts.status, "ACTIVE"))).limit(1))[0];
-    return row ? { id: row.id, organizationId: row.organizationId, provider: row.provider, externalAccountId: row.externalAccountId, status: row.status, baseUrl: row.baseUrl, credentialRef: row.credentialRef } : null;
+  async linkOpportunityConversation(input: { organizationId: string; opportunityId: string; conversationId: string }) {
+    const valid = await this.db.select({ opportunityId: opportunities.id, conversationId: conversations.id }).from(opportunities).innerJoin(conversations, and(eq(conversations.id, input.conversationId), eq(conversations.organizationId, input.organizationId))).where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.organizationId, input.organizationId))).limit(1);
+    if (!valid.length) return null;
+    await this.db.insert(opportunityConversations).values({ id: randomUUID(), ...input }).onConflictDoNothing({ target: [opportunityConversations.opportunityId, opportunityConversations.conversationId] });
+    return { opportunityId: input.opportunityId, conversationId: input.conversationId };
   }
+
+  async upsertSyncedContact(input: { organizationId: string; externalId: string; name: string; email: string; phone: string; ownerId: string }) {
+    const row = await this.db.insert(contacts).values({ id: `contact-${input.organizationId}-${input.externalId}`, organizationId: input.organizationId, externalId: input.externalId, name: input.name || "Contato Chatwoot", company: "", phone: input.phone, email: input.email, ownerId: input.ownerId, notes: "Importado do Chatwoot", lastConversationAt: new Date() }).onConflictDoUpdate({ target: [contacts.organizationId, contacts.externalId], set: { name: input.name || "Contato Chatwoot", email: input.email, phone: input.phone, updatedAt: new Date() } }).returning();
+    return row[0];
+  }
+  async upsertSyncedChannel(input: { organizationId: string; integrationAccountId: string; externalId: string; name: string; type: string }) {
+    const row = await this.db.insert(channels).values({ id: `channel-${input.organizationId}-${input.externalId}`, organizationId: input.organizationId, integrationAccountId: input.integrationAccountId, externalId: input.externalId, name: input.name, type: input.type, status: "CONNECTED", conversations: 0 }).onConflictDoUpdate({ target: [channels.organizationId, channels.externalId], set: { integrationAccountId: input.integrationAccountId, name: input.name, type: input.type, status: "CONNECTED", updatedAt: new Date() } }).returning();
+    return row[0];
+  }
+  async upsertSyncedConversation(input: { organizationId: string; externalId: string; contactId: string; channelId: string; status: string; assignedToId?: string; lastMessage: string; lastMessageAt: Date }) {
+    const existing = (await this.db.select().from(conversations).where(and(eq(conversations.organizationId, input.organizationId), eq(conversations.externalId, input.externalId))).limit(1))[0];
+    if (existing) { await this.db.update(conversations).set({ contactId: input.contactId, channelId: input.channelId, status: input.status, assignedToId: input.assignedToId ?? null, lastMessage: input.lastMessage, lastMessageAt: input.lastMessageAt, updatedAt: new Date() }).where(eq(conversations.id, existing.id)); return existing.id; }
+    const row = await this.db.insert(conversations).values({ id: `conversation-${input.organizationId}-${input.externalId}`, organizationId: input.organizationId, externalId: input.externalId, contactId: input.contactId, channelId: input.channelId, status: input.status, assignedToId: input.assignedToId ?? null, unread: 0, lastMessage: input.lastMessage, lastMessageAt: input.lastMessageAt }).returning({ id: conversations.id });
+    return row[0].id;
+  }
+  async upsertSyncedMessage(input: { organizationId: string; conversationId: string; externalId?: string; sender: "CONTACT" | "AGENT" | "SYSTEM"; authorName: string; body: string; createdAt: Date; internal?: boolean }) {
+    if (input.externalId) { const row = await this.db.insert(messages).values({ id: `message-${input.organizationId}-${input.externalId}`, ...input, internal: input.internal ?? false }).onConflictDoUpdate({ target: [messages.organizationId, messages.externalId], set: { body: input.body, authorName: input.authorName, sender: input.sender, createdAt: input.createdAt, internal: input.internal ?? false } }).returning(); return row[0]; }
+    const row = await this.db.insert(messages).values({ id: randomUUID(), ...input, internal: input.internal ?? false }).returning(); return row[0];
+  }
+
+  async listIntegrations(organizationId: string) { return (await this.db.select().from(integrationAccounts).where(eq(integrationAccounts.organizationId, organizationId)).orderBy(integrationAccounts.createdAt)).map(toIntegration); }
+  async getIntegration(organizationId: string, id: string) { const row = (await this.db.select().from(integrationAccounts).where(and(eq(integrationAccounts.organizationId, organizationId), eq(integrationAccounts.id, id))).limit(1))[0]; return row ? toIntegration(row) : null; }
+  async saveIntegration(input: { id: string; organizationId: string; provider: string; displayName: string; externalAccountId: string; baseUrl: string; credentialCiphertext: string; credentialIv: string; credentialTag: string; credentialVersion: number; webhookSecretCiphertext?: string | null; webhookSecretIv?: string | null; webhookSecretTag?: string | null; webhookSecretVersion?: number | null }) {
+    const row = await this.db.insert(integrationAccounts).values({ ...input, status: "UNVERIFIED", metadata: {} }).onConflictDoUpdate({ target: integrationAccounts.id, set: { displayName: input.displayName, externalAccountId: input.externalAccountId, baseUrl: input.baseUrl, credentialCiphertext: input.credentialCiphertext, credentialIv: input.credentialIv, credentialTag: input.credentialTag, credentialVersion: input.credentialVersion, webhookSecretCiphertext: input.webhookSecretCiphertext ?? null, webhookSecretIv: input.webhookSecretIv ?? null, webhookSecretTag: input.webhookSecretTag ?? null, webhookSecretVersion: input.webhookSecretVersion ?? null, status: "UNVERIFIED", lastErrorCode: null, updatedAt: new Date() } }).returning();
+    return toIntegration(row[0]);
+  }
+  async updateIntegration(organizationId: string, id: string, input: Record<string, unknown>) { await this.db.update(integrationAccounts).set(input).where(and(eq(integrationAccounts.organizationId, organizationId), eq(integrationAccounts.id, id))); return this.getIntegration(organizationId, id); }
+  async deleteIntegration(organizationId: string, id: string) { await this.db.delete(integrationAccounts).where(and(eq(integrationAccounts.organizationId, organizationId), eq(integrationAccounts.id, id))); }
+
+  async createInvite(input: { id: string; organizationId: string; email: string; role: Role; tokenHash: string; expiresAt: Date; createdBy: string }) { const row = await this.db.insert(organizationInvites).values(input).returning(); return row[0]; }
+  async listInvites(organizationId: string) { return this.db.select().from(organizationInvites).where(eq(organizationInvites.organizationId, organizationId)).orderBy(desc(organizationInvites.createdAt)); }
+  async findInviteByHash(tokenHash: string) { return (await this.db.select().from(organizationInvites).where(eq(organizationInvites.tokenHash, tokenHash)).limit(1))[0] ?? null; }
+  async revokeInvite(organizationId: string, id: string) { await this.db.update(organizationInvites).set({ revokedAt: new Date() }).where(and(eq(organizationInvites.organizationId, organizationId), eq(organizationInvites.id, id), isNull(organizationInvites.acceptedAt))); }
+  async acceptInviteAtomic(input: { tokenHash: string; name: string; passwordHash?: string; existingUserId?: string; session: { id: string; tokenHash: string; expiresAt: Date } }) {
+    return this.db.transaction(async (tx) => {
+      const invite = (await tx.select().from(organizationInvites).where(and(eq(organizationInvites.tokenHash, input.tokenHash), isNull(organizationInvites.acceptedAt), isNull(organizationInvites.revokedAt), gt(organizationInvites.expiresAt, new Date()))).limit(1))[0];
+      if (!invite) return null;
+      let user = input.existingUserId ? (await tx.select().from(users).where(eq(users.id, input.existingUserId)).limit(1))[0] : (await tx.select().from(users).where(eq(users.email, invite.email)).limit(1))[0];
+      if (!user) {
+        if (!input.passwordHash) throw new Error("Senha necessária");
+        const userId = randomUUID(); await tx.insert(users).values({ id: userId, email: invite.email, name: input.name, passwordHash: input.passwordHash, avatar: input.name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase() || "AG" });
+        user = (await tx.select().from(users).where(eq(users.id, userId)).limit(1))[0];
+      }
+      await tx.insert(organizationMembers).values({ id: randomUUID(), organizationId: invite.organizationId, userId: user.id, role: invite.role, status: "ACTIVE" }).onConflictDoUpdate({ target: [organizationMembers.organizationId, organizationMembers.userId], set: { role: invite.role, status: "ACTIVE", updatedAt: new Date() } });
+      await tx.update(organizationInvites).set({ acceptedAt: new Date() }).where(eq(organizationInvites.id, invite.id));
+      await tx.insert(authSessions).values({ id: input.session.id, userId: user.id, organizationId: invite.organizationId, tokenHash: input.session.tokenHash, expiresAt: input.session.expiresAt });
+      return { invite, user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar }, organizationId: invite.organizationId };
+    });
+  }
+
+  async findIntegration(provider: string, externalAccountId: string): Promise<IntegrationRecord | null> {
+    const row = (await this.db.select().from(integrationAccounts).where(and(eq(integrationAccounts.provider, provider), eq(integrationAccounts.externalAccountId, externalAccountId), inArray(integrationAccounts.status, ["ACTIVE", "CONNECTED"]))).limit(1))[0];
+    return row ? toIntegration(row) : null;
+  }
+  async findIntegrationByExternalAccountId(externalAccountId: string) { const row = (await this.db.select().from(integrationAccounts).where(and(eq(integrationAccounts.externalAccountId, externalAccountId), inArray(integrationAccounts.status, ["ACTIVE", "CONNECTED"]))).limit(1))[0]; return row ? toIntegration(row) : null; }
 
   async claimWebhookEvent(input: { organizationId: string; integrationAccountId: string; provider: string; externalEventId: string; payloadHash: string }): Promise<boolean> {
     const inserted = await this.db.insert(webhookEvents).values({ id: randomUUID(), ...input }).onConflictDoNothing({ target: [webhookEvents.integrationAccountId, webhookEvents.externalEventId] }).returning({ id: webhookEvents.id });
