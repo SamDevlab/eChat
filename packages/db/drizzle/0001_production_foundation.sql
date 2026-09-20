@@ -78,8 +78,8 @@ ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS pipeline_id text;
 ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS stage_id text;
 UPDATE opportunities o SET pipeline_id = p.id, stage_id = s.id
 FROM pipelines p
-JOIN pipeline_stages s ON s.pipeline_id = p.id AND s.key = o.stage
-WHERE p.organization_id = o.organization_id AND p.id = o.organization_id || '-pipeline-default';
+JOIN pipeline_stages s ON s.pipeline_id = p.id
+WHERE p.organization_id = o.organization_id AND p.id = o.organization_id || '-pipeline-default' AND s.key = o.stage;
 ALTER TABLE opportunities ALTER COLUMN pipeline_id SET NOT NULL;
 ALTER TABLE opportunities ALTER COLUMN stage_id SET NOT NULL;
 ALTER TABLE opportunities DROP COLUMN IF EXISTS stage;
