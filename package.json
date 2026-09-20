@@ -13,7 +13,7 @@
     "db:seed": "npm run build --workspace @echat/shared && npm run build --workspace @echat/db && npm --workspace @echat/api run db:seed",
     "db:generate": "npm --workspace @echat/db run generate",
     "db:migrate": "npm run build --workspace @echat/shared && npm run build --workspace @echat/db && npm --workspace @echat/api run db:migrate",
-    "test:integration": "vitest run apps/api/src/integration.test.ts"
+    "test:integration": "vitest run apps/api/src/integration.test.ts apps/api/src/customer_ready.test.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

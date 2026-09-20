@@ -8,7 +8,7 @@ const timestamps = () => ({
 });
 
 export const organizations = pgTable("organizations", {
-  id: id("id"), name: text("name").notNull(), plan: text("plan").notNull(), createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  id: id("id"), name: text("name").notNull(), plan: text("plan").notNull(), timezone: text("timezone").notNull().default("America/Sao_Paulo"), onboardingStep: text("onboarding_step").notNull().default("COMPANY"), onboardingCompleted: boolean("onboarding_completed").notNull().default(false), createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export const users = pgTable("users", {
@@ -24,7 +24,7 @@ export const contacts = pgTable("contacts", {
 }, (table) => ({ orgIndex: index("contacts_org_idx").on(table.organizationId), externalIndex: uniqueIndex("contacts_org_external_unique").on(table.organizationId, table.externalId) }));
 
 export const channels = pgTable("channels", {
-  id: id("id"), organizationId: org(), externalId: text("external_id"), name: text("name").notNull(), type: text("type").notNull(), status: text("status").notNull(), conversations: integer("conversations").notNull().default(0), ...timestamps(),
+  id: id("id"), organizationId: org(), integrationAccountId: text("integration_account_id"), externalId: text("external_id"), name: text("name").notNull(), type: text("type").notNull(), status: text("status").notNull(), conversations: integer("conversations").notNull().default(0), ...timestamps(),
 }, (table) => ({ orgIndex: index("channels_org_idx").on(table.organizationId), externalIndex: uniqueIndex("channels_org_external_unique").on(table.organizationId, table.externalId) }));
 
 export const conversations = pgTable("conversations", {
@@ -55,7 +55,7 @@ export const tags = pgTable("tags", { id: id("id"), organizationId: org(), name:
 export const contactTags = pgTable("contact_tags", { id: id("id"), organizationId: org(), contactId: text("contact_id").notNull(), tagId: text("tag_id").notNull() }, (table) => ({ contactTagUnique: uniqueIndex("contact_tags_contact_tag_unique").on(table.contactId, table.tagId), orgIndex: index("contact_tags_org_idx").on(table.organizationId) }));
 
 export const integrationAccounts = pgTable("integration_accounts", {
-  id: id("id"), organizationId: org(), provider: text("provider").notNull(), externalAccountId: text("external_account_id").notNull(), status: text("status").notNull(), baseUrl: text("base_url"), credentialRef: text("credential_ref"), metadata: jsonb("metadata").$type<Record<string, string>>().default({}).notNull(), ...timestamps(),
+  id: id("id"), organizationId: org(), provider: text("provider").notNull(), displayName: text("display_name").notNull().default("Integração"), externalAccountId: text("external_account_id").notNull(), status: text("status").notNull(), baseUrl: text("base_url"), credentialRef: text("credential_ref"), credentialCiphertext: text("credential_ciphertext"), credentialIv: text("credential_iv"), credentialTag: text("credential_tag"), credentialVersion: integer("credential_version"), webhookSecretCiphertext: text("webhook_secret_ciphertext"), webhookSecretIv: text("webhook_secret_iv"), webhookSecretTag: text("webhook_secret_tag"), webhookSecretVersion: integer("webhook_secret_version"), webhookRegistrationId: text("webhook_registration_id"), lastCheckAt: timestamp("last_check_at", { withTimezone: true }), lastErrorCode: text("last_error_code"), lastSyncStartedAt: timestamp("last_sync_started_at", { withTimezone: true }), lastSyncCompletedAt: timestamp("last_sync_completed_at", { withTimezone: true }), lastSyncStatus: text("last_sync_status"), lastSyncError: text("last_sync_error"), metadata: jsonb("metadata").$type<Record<string, string>>().default({}).notNull(), ...timestamps(),
 }, (table) => ({ providerAccountUnique: uniqueIndex("integration_accounts_provider_external_unique").on(table.provider, table.externalAccountId), orgIndex: index("integration_accounts_org_idx").on(table.organizationId) }));
 
 export const authSessions = pgTable("auth_sessions", {
@@ -66,4 +66,12 @@ export const webhookEvents = pgTable("webhook_events", {
   id: id("id"), organizationId: org(), integrationAccountId: text("integration_account_id").notNull(), provider: text("provider").notNull(), externalEventId: text("external_event_id").notNull(), payloadHash: text("payload_hash").notNull(), receivedAt: timestamp("received_at").defaultNow().notNull(), processedAt: timestamp("processed_at"),
 }, (table) => ({ eventUnique: uniqueIndex("webhook_events_integration_event_unique").on(table.integrationAccountId, table.externalEventId), orgIndex: index("webhook_events_org_idx").on(table.organizationId, table.receivedAt) }));
 
-export const schemaTables = { organizations, users, organizationMembers, contacts, channels, conversations, messages, pipelines, pipelineStages, opportunities, opportunityActivities, tags, contactTags, integrationAccounts, authSessions, webhookEvents };
+export const organizationInvites = pgTable("organization_invites", {
+  id: id("id"), organizationId: org(), email: text("email").notNull(), role: text("role").notNull(), tokenHash: text("token_hash").notNull(), expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(), createdBy: text("created_by").notNull(), acceptedAt: timestamp("accepted_at", { withTimezone: true }), revokedAt: timestamp("revoked_at", { withTimezone: true }), createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({ tokenUnique: uniqueIndex("organization_invites_token_hash_unique").on(table.tokenHash), orgIndex: index("organization_invites_org_idx").on(table.organizationId, table.createdAt), emailIndex: index("organization_invites_org_email_idx").on(table.organizationId, table.email) }));
+
+export const opportunityConversations = pgTable("opportunity_conversations", {
+  id: id("id"), organizationId: org(), opportunityId: text("opportunity_id").notNull(), conversationId: text("conversation_id").notNull(), createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({ linkUnique: uniqueIndex("opportunity_conversations_unique").on(table.opportunityId, table.conversationId), orgIndex: index("opportunity_conversations_org_idx").on(table.organizationId) }));
+
+export const schemaTables = { organizations, users, organizationMembers, contacts, channels, conversations, messages, pipelines, pipelineStages, opportunities, opportunityActivities, tags, contactTags, integrationAccounts, authSessions, webhookEvents, organizationInvites, opportunityConversations };
