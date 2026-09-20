@@ -8,7 +8,8 @@
     "build": "tsc -p tsconfig.json",
     "db:seed": "tsx --env-file=../../.env src/seed.ts",
     "db:migrate": "tsx --env-file=../../.env src/migrate.ts",
-    "test:integration": "vitest run src/integration.test.ts"
+    "test:integration": "vitest run src/integration.test.ts",
+    "test:live": "tsx --env-file=../../.env src/live-smoke.ts"
   },
   "dependencies": {
     "@echat/db": "0.1.0",

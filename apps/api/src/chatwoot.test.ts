@@ -50,12 +50,12 @@ describe("Chatwoot adapter", () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ payload: [{ id: 88, status: "open", meta: { sender: { id: 10 }, channel: "Channel::WebWidget" }, last_activity_at: 1_700_000_000, last_non_activity_message: { content: "Olá" } }] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ id: 88, status: "open", meta: { sender: { id: 10 }, channel: "Channel::WebWidget" }, last_activity_at: 1_700_000_000, last_non_activity_message: { content: "Olá" }, messages: [{ id: 9, content: "Olá", message_type: "incoming", created_at: 1_700_000_000, sender: { name: "Maria" } }] }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "webhook-1" }), { status: 200 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "webhook-1", secret: "generated-webhook-secret" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const provider = new ChatwootProvider({ baseUrl: "https://chatwoot.example", token: "secret", accountId: "77" });
     const result = await provider.listConversationsWithMessages!(1);
     expect(result.items[0]).toEqual(expect.objectContaining({ externalId: "88", contactExternalId: "10", channelType: "WEBCHAT", lastMessage: "Olá", messages: [expect.objectContaining({ externalId: "9", sender: "CONTACT", body: "Olá" })] }));
-    await expect(provider.registerWebhook!("https://pilot.example/api/v1/webhooks/chatwoot")).resolves.toEqual({ id: "webhook-1" });
+    await expect(provider.registerWebhook!("https://pilot.example/api/v1/webhooks/chatwoot")).resolves.toEqual({ id: "webhook-1", secret: "generated-webhook-secret" });
     expect(fetchMock.mock.calls[2][1]).toEqual(expect.objectContaining({ method: "POST", body: JSON.stringify({ name: "eChat", url: "https://pilot.example/api/v1/webhooks/chatwoot", subscriptions: ["message_created"] }) }));
   });
 
@@ -64,5 +64,10 @@ describe("Chatwoot adapter", () => {
     const provider = new ChatwootProvider({ baseUrl: "https://chatwoot.example", token: "secret", accountId: "77", webhookSecret: secret });
     expect(provider.verifyWebhook({ "x-chatwoot-timestamp": timestamp, "x-chatwoot-signature": signature }, rawBody)).toBe(true);
     expect(provider.verifyWebhook({ "x-chatwoot-timestamp": timestamp, "x-chatwoot-signature": "sha256=bad" }, rawBody)).toBe(false);
+  });
+
+  it("reads existing webhooks without exposing credentials in the adapter result", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify([{ id: 12, url: "https://pilot.example/api/v1/webhooks/chatwoot" }]), { status: 200 })));
+    await expect(new ChatwootProvider({ baseUrl: "https://chatwoot.example", token: "secret", accountId: "77" }).listWebhooks()).resolves.toEqual([{ id: "12", url: "https://pilot.example/api/v1/webhooks/chatwoot", secret: undefined }]);
   });
 });
