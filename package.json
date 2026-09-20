@@ -4,14 +4,16 @@
   "version": "0.1.0",
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
-    "dev": "concurrently -k \"npm run dev:api\" \"npm run dev:web\"",
+    "dev": "npm run build --workspace @echat/shared && npm run build --workspace @echat/db && concurrently -k \"npm run dev:api\" \"npm run dev:web\"",
     "dev:api": "npm --workspace @echat/api run dev",
     "dev:web": "npm --workspace @echat/web run dev",
     "check": "tsc --build tsconfig.json",
     "test": "npm run build --workspace @echat/shared && vitest run",
     "build": "npm run build --workspace @echat/shared && npm run build --workspaces",
-    "db:seed": "npm --workspace @echat/api run db:seed",
-    "db:generate": "npm --workspace @echat/db run generate"
+    "db:seed": "npm run build --workspace @echat/shared && npm run build --workspace @echat/db && npm --workspace @echat/api run db:seed",
+    "db:generate": "npm --workspace @echat/db run generate",
+    "db:migrate": "npm run build --workspace @echat/shared && npm run build --workspace @echat/db && npm --workspace @echat/api run db:migrate",
+    "test:integration": "vitest run apps/api/src/integration.test.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

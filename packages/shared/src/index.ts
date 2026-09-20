@@ -28,6 +28,14 @@ export interface User {
   avatar: string;
 }
 
+export interface OrganizationMember {
+  id: string;
+  organizationId: string;
+  userId: string;
+  role: Role;
+  status: "ACTIVE" | "INVITED" | "DISABLED";
+}
+
 export interface Contact {
   id: string;
   organizationId: string;
@@ -52,7 +60,9 @@ export interface Channel {
 }
 
 export interface Message {
+  organizationId?: string;
   id: string;
+  externalId?: string;
   conversationId: string;
   sender: "CONTACT" | "AGENT" | "SYSTEM";
   authorName: string;
@@ -66,6 +76,7 @@ export interface Conversation {
   organizationId: string;
   contactId: string;
   channelId: string;
+  externalId?: string;
   status: ConversationStatus;
   assignedToId?: string;
   unread: number;
@@ -88,6 +99,8 @@ export interface Opportunity {
   organizationId: string;
   title: string;
   contactId: string;
+  pipelineId?: string;
+  stageId?: string;
   company: string;
   value: number;
   stage: OpportunityStage;
@@ -121,6 +134,9 @@ export const sendMessageSchema = z.object({
   internal: z.boolean().optional().default(false),
 });
 
+export const assignConversationSchema = z.object({ assignedToId: z.string().min(1).nullable().optional() });
+export const updateConversationStatusSchema = z.object({ status: conversationStatusSchema });
+
 export const moveOpportunitySchema = z.object({
   stage: opportunityStageSchema,
 });
@@ -133,9 +149,31 @@ export const createOpportunitySchema = z.object({
 });
 
 export interface MessagingProvider {
-  sendMessage(input: { conversationId: string; body: string; internal?: boolean }): Promise<Message>;
+  readonly name: string;
+  sendMessage(input: { conversationId: string; externalConversationId?: string; body: string; internal?: boolean }): Promise<NormalizedOutgoingMessage>;
   normalizeConversation(input: unknown): Conversation;
   normalizeMessage(input: unknown): Message;
   normalizeContact(input: unknown): Contact;
-  verifyWebhook(headers: Record<string, string | undefined>, rawBody: string): boolean;
+  verifyWebhook?(headers: Record<string, string | undefined>, rawBody: string): boolean;
+  normalizeWebhook?(input: unknown): NormalizedWebhookEvent[];
+}
+
+export interface NormalizedOutgoingMessage {
+  externalId?: string;
+  body: string;
+  createdAt: string;
+  sender: "AGENT";
+  authorName: string;
+  internal?: boolean;
+}
+
+export interface NormalizedWebhookEvent {
+  externalEventId: string;
+  externalAccountId: string;
+  externalConversationId: string;
+  externalMessageId?: string;
+  body: string;
+  createdAt: string;
+  sender: "CONTACT" | "AGENT";
+  authorName: string;
 }
