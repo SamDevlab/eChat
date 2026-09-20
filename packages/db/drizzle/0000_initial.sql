@@ -1,0 +1,14 @@
+CREATE TABLE IF NOT EXISTS organizations (id text PRIMARY KEY, name text NOT NULL, plan text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS users (id text PRIMARY KEY, organization_id text NOT NULL, name text NOT NULL, email text NOT NULL, password_hash text NOT NULL, role text NOT NULL, avatar text NOT NULL, CONSTRAINT users_org_email_idx UNIQUE (organization_id, email));
+CREATE TABLE IF NOT EXISTS organization_members (id text PRIMARY KEY, organization_id text NOT NULL, user_id text NOT NULL, role text NOT NULL);
+CREATE TABLE IF NOT EXISTS contacts (id text PRIMARY KEY, organization_id text NOT NULL, name text NOT NULL, company text NOT NULL, phone text NOT NULL, email text NOT NULL, owner_id text NOT NULL, notes text NOT NULL, last_conversation_at timestamptz NOT NULL);
+CREATE TABLE IF NOT EXISTS channels (id text PRIMARY KEY, organization_id text NOT NULL, name text NOT NULL, type text NOT NULL, status text NOT NULL);
+CREATE TABLE IF NOT EXISTS conversations (id text PRIMARY KEY, organization_id text NOT NULL, contact_id text NOT NULL, channel_id text NOT NULL, status text NOT NULL, assigned_to_id text, unread integer NOT NULL DEFAULT 0, last_message text NOT NULL, last_message_at timestamptz NOT NULL);
+CREATE TABLE IF NOT EXISTS messages (id text PRIMARY KEY, conversation_id text NOT NULL, sender text NOT NULL, author_name text NOT NULL, body text NOT NULL, internal boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS pipelines (id text PRIMARY KEY, organization_id text NOT NULL, name text NOT NULL);
+CREATE TABLE IF NOT EXISTS pipeline_stages (id text PRIMARY KEY, organization_id text NOT NULL, pipeline_id text NOT NULL, name text NOT NULL, key text NOT NULL, "order" integer NOT NULL, color text NOT NULL);
+CREATE TABLE IF NOT EXISTS opportunities (id text PRIMARY KEY, organization_id text NOT NULL, title text NOT NULL, contact_id text NOT NULL, company text NOT NULL, value numeric NOT NULL, stage text NOT NULL, owner_id text NOT NULL, source text NOT NULL, last_activity text NOT NULL, note text NOT NULL);
+CREATE TABLE IF NOT EXISTS opportunity_activities (id text PRIMARY KEY, organization_id text NOT NULL, opportunity_id text NOT NULL, actor_id text NOT NULL, type text NOT NULL, detail text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS tags (id text PRIMARY KEY, organization_id text NOT NULL, name text NOT NULL, color text NOT NULL);
+CREATE TABLE IF NOT EXISTS contact_tags (id text PRIMARY KEY, organization_id text NOT NULL, contact_id text NOT NULL, tag_id text NOT NULL);
+CREATE TABLE IF NOT EXISTS integration_accounts (id text PRIMARY KEY, organization_id text NOT NULL, provider text NOT NULL, external_id text NOT NULL, status text NOT NULL);
