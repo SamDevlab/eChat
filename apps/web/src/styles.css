@@ -50,3 +50,52 @@
 .onboarding-steps b { display: grid; place-items: center; width: 17px; height: 17px; border-radius: 50%; background: rgba(255,255,255,.35); font-size: 9px; }
 @media (max-width: 980px) { .onboarding-card { margin-inline: 18px; flex-wrap: wrap; } .onboarding-steps { order: 3; width: 100%; } .onboarding-card > .button { margin-left: auto; } }
 @media (max-width: 680px) { .app-content { min-height: calc(100vh - 62px); } .onboarding-card { margin: 12px 15px 0; padding: 14px; } .onboarding-steps { overflow-x: auto; } .inline-form, .integration-form, .settings-form { grid-template-columns: 1fr; } .invite-result { align-items: flex-start; flex-direction: column; } .team-actions { width: 100%; margin-left: 0; } }
+
+/* QA v1 interaction and responsive corrections */
+.app-shell { overflow-x: hidden; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid rgba(20, 184, 166, .35); outline-offset: 2px; }
+.chat-header-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.mobile-back { display: none; place-items: center; width: 30px; height: 30px; flex: 0 0 auto; border-radius: 8px; color: var(--muted); background: var(--surface-muted); }
+.channel-card-disabled { background: #fbfcfd; }
+.channel-card-disabled .channel-icon { color: #8292a4; background: #eef3f7; }
+.toast { position: fixed; z-index: 60; right: 22px; bottom: 22px; max-width: min(360px, calc(100vw - 30px)); padding: 12px 15px; border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 30px rgba(15, 23, 42, .18); color: #fff; background: #0f766e; font-size: 11px; font-weight: 700; }
+.toast.error { background: #b91c1c; border-color: #991b1b; }
+.modal-backdrop { position: fixed; z-index: 50; inset: 0; display: grid; place-items: center; padding: 16px; background: rgba(15, 23, 42, .34); }
+.modal { width: min(520px, 100%); max-height: min(720px, calc(100vh - 32px)); overflow-y: auto; padding: 24px; border: 1px solid var(--border); border-radius: 16px; background: #fff; box-shadow: 0 20px 55px rgba(15, 23, 42, .22); }
+.modal-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 18px; border-bottom: 1px solid #edf1f5; }
+.modal-heading h2 { margin-bottom: 5px; font-size: 18px; }
+.modal-heading p { font-size: 11px; }
+.modal-close { display: grid; place-items: center; width: 31px; height: 31px; border-radius: 8px; color: #718195; background: #f4f7fa; }
+.opportunity-form { display: grid; gap: 14px; padding-top: 18px; }
+.opportunity-form label { display: grid; gap: 6px; color: #425269; font-size: 11px; font-weight: 700; }
+.opportunity-form input, .opportunity-form select { width: 100%; padding: 10px 11px; border: 1px solid var(--border); border-radius: 8px; outline: none; background: #fff; color: var(--foreground); font-size: 11px; }
+.opportunity-form input:focus, .opportunity-form select:focus { border-color: #58bcb0; box-shadow: 0 0 0 3px rgba(15, 118, 110, .1); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
+@media (max-width: 680px) {
+  .chat-header-left { flex: 1; }
+  .mobile-back { display: grid; }
+  .inbox-page.show-list .chat-panel, .inbox-page.show-list .contact-context { display: none; }
+  .inbox-page.show-list .inbox-list { display: flex; }
+  .inbox-page.show-context .inbox-list, .inbox-page.show-context .chat-panel { display: none; }
+  .inbox-page.show-context .contact-context { display: block; transform: translateX(0); }
+  .inbox-page.show-list .mobile-context-toggle, .inbox-page.show-context .mobile-context-toggle { display: none; }
+  .modal { padding: 19px; }
+  .toast { right: 15px; bottom: 15px; }
+}
+
+@media (max-width: 680px) {
+  .chat-panel { min-width: 0; width: 100%; max-width: 100%; overflow-x: hidden; }
+  .chat-header, .chat-header-left, .chat-person, .chat-messages, .composer { min-width: 0; max-width: 100%; }
+  .chat-header { width: 100%; }
+  .chat-person { overflow: hidden; }
+  .chat-header-actions { flex: 0 0 auto; }
+  .chat-header-actions .button:nth-child(2) .mobile-action-label { display: none; }
+  .message-wrap { min-width: 0; max-width: 100%; }
+  .message-bubble { overflow-wrap: anywhere; }
+  .composer textarea { box-sizing: border-box; }
+}
+
+
+
+.inbox-tabs { flex-wrap: wrap; overflow: visible; gap: 4px; }
+.inbox-tabs button { flex: 0 0 auto; }
