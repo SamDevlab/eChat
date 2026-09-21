@@ -83,6 +83,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .toast { right: 15px; bottom: 15px; }
 }
 
+@media (max-width: 680px) {
+  .chat-panel { min-width: 0; width: 100%; max-width: 100%; overflow-x: hidden; }
+  .chat-header, .chat-header-left, .chat-person, .chat-messages, .composer { min-width: 0; max-width: 100%; }
+  .chat-header { width: 100%; }
+  .chat-person { overflow: hidden; }
+  .chat-header-actions { flex: 0 0 auto; }
+  .chat-header-actions .button:nth-child(2) .mobile-action-label { display: none; }
+  .message-wrap { min-width: 0; max-width: 100%; }
+  .message-bubble { overflow-wrap: anywhere; }
+  .composer textarea { box-sizing: border-box; }
+}
+
 
 
 .inbox-tabs { flex-wrap: wrap; overflow: visible; gap: 4px; }
