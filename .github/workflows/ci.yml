@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: postgres://echat:echat@localhost:5432/echat_test
+      DATABASE_URL_TEST: postgres://echat:echat@localhost:5432/echat_test
+      INTEGRATION_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      APP_URL: http://127.0.0.1:5173
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: echat_test
+          POSTGRES_USER: echat
+          POSTGRES_PASSWORD: echat
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U echat -d echat_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Provide empty local env file for env-file scripts
+        run: touch .env
+
+      - name: Apply migrations from zero
+        run: npm run db:migrate
+
+      - name: Typecheck
+        run: npm run check
+
+      - name: Unit and integration tests
+        run: npm run test
+
+      - name: Production build
+        run: npm run build
+
+      - name: PostgreSQL integration gate
+        run: npm run test:integration
+
+      - name: Diff check
+        run: git diff --check
