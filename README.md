@@ -2,6 +2,20 @@
 
 eChat é uma fundação B2B de inbox omnichannel e CRM. O runtime usa PostgreSQL como source of truth; a UI não mantém estado de negócio em `localStorage` e o Mock Provider só simula a integração externa.
 
+## Omnichannel backend
+
+O eChat é dono de organizações, permissões, contatos, identidades externas, conversas, mensagens e CRM. Providers são somente a camada de comunicação com APIs externas; o Chatwoot é o primeiro provider operacional e não é a fonte de verdade do domínio.
+
+Canais suportados no domínio nesta versão:
+
+- WhatsApp
+- Instagram Direct
+- Email
+
+As conexões de canal permanecem em `integration_accounts`, com `channel_type`, `provider_type`, conta/inbox externo, status operacional e credenciais cifradas no servidor. O mesmo `ChatwootProvider` recebe o contexto da conexão e pode operar inboxes diferentes sem acoplar o domínio ao Chatwoot. WebChat e outros canais ficam preservados apenas para compatibilidade de dados/UI e não são habilitados pela nova normalização.
+
+Identidades externas são vinculadas por organização, conexão e ID externo em `contact_identities`; uma pessoa pode ter WhatsApp, Instagram e Email no mesmo contato interno. Conversas e mensagens mantêm o mapping da conexão, direção, tipo, status de entrega e timestamps do provider. Anexos têm uma representação mínima sem download automático.
+
 ## Desenvolvimento local
 
 PostgreSQL nativo é obrigatório para a API:
