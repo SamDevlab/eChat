@@ -10,6 +10,15 @@ const keyFromEnv = (value = process.env.INTEGRATION_ENCRYPTION_KEY): Buffer => {
   return decoded;
 };
 
+export const isValidIntegrationEncryptionKey = (value: string | undefined): boolean => {
+  try {
+    keyFromEnv(value);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 export const encryptSecret = (value: string, key = process.env.INTEGRATION_ENCRYPTION_KEY): EncryptedSecret => {
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", keyFromEnv(key), iv);

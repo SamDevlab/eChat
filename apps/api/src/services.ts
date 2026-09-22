@@ -105,7 +105,7 @@ export class DomainServices {
   }
 
   async testIntegration(user: SessionUser, id: string) { if (!canManage(user.role)) throw new DomainError(403, "Sem permissão para testar integrações"); const integration = await this.repositories.getIntegration(user.organizationId, id); if (!integration) throw new DomainError(404, "Integração não encontrada"); try { const provider = await this.providerForIntegration(user.organizationId, id) as IntegrationMessagingProvider; const result = provider.testConnection ? await provider.testConnection() : { accountId: integration.externalAccountId }; if (result.accountId !== integration.externalAccountId) throw new Error("ACCOUNT_MISMATCH");
-    const publicUrl = process.env.PUBLIC_APP_URL ?? process.env.APP_URL;
+    const publicUrl = process.env.PUBLIC_APP_URL?.trim() || process.env.APP_URL;
     let webhookRegistrationId = integration.webhookRegistrationId;
     let generatedWebhookSecret: string | undefined;
     const webhookUrl = publicUrl ? `${publicUrl.replace(/\/$/, "")}/api/v1/webhooks/chatwoot` : "";
