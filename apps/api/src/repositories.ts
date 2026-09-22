@@ -259,7 +259,7 @@ export class Repositories {
     const row = (await this.db.select().from(integrationAccounts).where(and(eq(integrationAccounts.provider, provider), eq(integrationAccounts.externalAccountId, externalAccountId), inArray(integrationAccounts.status, ["ACTIVE", "CONNECTED"]))).limit(1))[0];
     return row ? toIntegration(row) : null;
   }
-  async findIntegrationByExternalAccountId(externalAccountId: string) { const row = (await this.db.select().from(integrationAccounts).where(and(eq(integrationAccounts.externalAccountId, externalAccountId), inArray(integrationAccounts.status, ["ACTIVE", "CONNECTED"]))).limit(1))[0]; return row ? toIntegration(row) : null; }
+  async findIntegrationByExternalAccountId(externalAccountId: string) { const row = (await this.db.select().from(integrationAccounts).where(and(eq(integrationAccounts.provider, "chatwoot"), eq(integrationAccounts.externalAccountId, externalAccountId), inArray(integrationAccounts.status, ["ACTIVE", "CONNECTED"]))).limit(1))[0]; return row ? toIntegration(row) : null; }
 
   async claimWebhookEvent(input: { organizationId: string; integrationAccountId: string; provider: string; externalEventId: string; payloadHash: string }): Promise<boolean> {
     const inserted = await this.db.insert(webhookEvents).values({ id: randomUUID(), ...input }).onConflictDoNothing({ target: [webhookEvents.integrationAccountId, webhookEvents.externalEventId] }).returning({ id: webhookEvents.id });
@@ -267,6 +267,7 @@ export class Repositories {
   }
 
   async completeWebhookEvent(integrationAccountId: string, externalEventId: string): Promise<void> { await this.db.update(webhookEvents).set({ processedAt: new Date() }).where(and(eq(webhookEvents.integrationAccountId, integrationAccountId), eq(webhookEvents.externalEventId, externalEventId))); }
+  async releaseWebhookEvent(organizationId: string, integrationAccountId: string, externalEventId: string): Promise<void> { await this.db.delete(webhookEvents).where(and(eq(webhookEvents.organizationId, organizationId), eq(webhookEvents.integrationAccountId, integrationAccountId), eq(webhookEvents.externalEventId, externalEventId), isNull(webhookEvents.processedAt))); }
 
   async findConversationByExternalId(organizationId: string, externalId: string) { return (await this.db.select().from(conversations).where(and(eq(conversations.organizationId, organizationId), eq(conversations.externalId, externalId))).limit(1))[0] ?? null; }
   async findMessageByExternalId(organizationId: string, externalId: string) { return (await this.db.select().from(messages).where(and(eq(messages.organizationId, organizationId), eq(messages.externalId, externalId))).limit(1))[0] ?? null; }

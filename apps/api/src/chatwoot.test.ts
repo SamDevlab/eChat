@@ -46,6 +46,16 @@ describe("Chatwoot adapter", () => {
     expect(fetchMock.mock.calls[1][0]).toBe("https://chatwoot.example/api/v1/accounts/77/contacts?page=1");
   });
 
+  it("rejects a successful response that cannot qualify the account", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 })));
+    await expect(new ChatwootProvider({ baseUrl: "https://chatwoot.example", token: "secret", accountId: "77" }).testConnection()).rejects.toThrow();
+  });
+
+  it("rejects malformed successful sync payloads instead of importing empty pages", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 })));
+    await expect(new ChatwootProvider({ baseUrl: "https://chatwoot.example", token: "secret", accountId: "77" }).listContacts(1)).rejects.toThrow("Resposta inválida");
+  });
+
   it("imports conversation details and registers the webhook", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ payload: [{ id: 88, status: "open", meta: { sender: { id: 10 }, channel: "Channel::WebWidget" }, last_activity_at: 1_700_000_000, last_non_activity_message: { content: "Olá" } }] }), { status: 200 }))
@@ -69,5 +79,10 @@ describe("Chatwoot adapter", () => {
   it("reads existing webhooks without exposing credentials in the adapter result", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify([{ id: 12, url: "https://pilot.example/api/v1/webhooks/chatwoot" }]), { status: 200 })));
     await expect(new ChatwootProvider({ baseUrl: "https://chatwoot.example", token: "secret", accountId: "77" }).listWebhooks()).resolves.toEqual([{ id: "12", url: "https://pilot.example/api/v1/webhooks/chatwoot", secret: undefined }]);
+  });
+
+  it("does not treat a webhook registration without an id as successful", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 })));
+    await expect(new ChatwootProvider({ baseUrl: "https://chatwoot.example", token: "secret", accountId: "77" }).registerWebhook!("https://pilot.example/api/v1/webhooks/chatwoot")).rejects.toThrow("Resposta inválida");
   });
 });
