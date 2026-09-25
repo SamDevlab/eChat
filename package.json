@@ -2,7 +2,10 @@
   "name": "echat",
   "private": true,
   "version": "0.1.0",
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "npm run build --workspace @echat/shared && npm run build --workspace @echat/db && concurrently -k \"npm run dev:api\" \"npm run dev:web\"",
     "dev:api": "npm --workspace @echat/api run dev",
@@ -14,7 +17,8 @@
     "db:generate": "npm --workspace @echat/db run generate",
     "db:migrate": "npm run build --workspace @echat/shared && npm run build --workspace @echat/db && npm --workspace @echat/api run db:migrate",
     "test:integration": "vitest run apps/api/src/integration.test.ts apps/api/src/customer_ready.test.ts",
-    "test:live": "npm --workspace @echat/api run test:live"
+    "test:live": "npm --workspace @echat/api run test:live",
+    "qualify:chatwoot": "npm --workspace @echat/api run qualify:chatwoot"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
