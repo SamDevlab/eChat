@@ -16,8 +16,37 @@ export const opportunityStageSchema = z.enum([
 ]);
 export type OpportunityStage = z.infer<typeof opportunityStageSchema>;
 
-export const channelTypeSchema = z.enum(["WHATSAPP", "WEBCHAT", "EMAIL", "INSTAGRAM"]);
+export const channelTypeSchema = z.enum(["WHATSAPP", "WEBCHAT", "EMAIL", "INSTAGRAM", "UNKNOWN"]);
 export type ChannelType = z.infer<typeof channelTypeSchema>;
+export const supportedChannelTypeSchema = z.enum(["WHATSAPP", "WEBCHAT", "INSTAGRAM", "EMAIL"]);
+export type SupportedChannelType = z.infer<typeof supportedChannelTypeSchema>;
+export const providerTypeSchema = z.enum(["CHATWOOT", "MOCK"]);
+export type ProviderType = z.infer<typeof providerTypeSchema>;
+export const messageDirectionSchema = z.enum(["INBOUND", "OUTBOUND"]);
+export type MessageDirection = z.infer<typeof messageDirectionSchema>;
+export const messageTypeSchema = z.enum(["TEXT", "IMAGE", "VIDEO", "AUDIO", "FILE"]);
+export type MessageType = z.infer<typeof messageTypeSchema>;
+export const deliveryStatusSchema = z.enum(["PENDING", "SENT", "DELIVERED", "READ", "FAILED"]);
+export type DeliveryStatus = z.infer<typeof deliveryStatusSchema>;
+
+export interface ProviderContext {
+  organizationId: string;
+  channelConnectionId: string;
+  channelType: ChannelType;
+  providerType: ProviderType;
+  externalAccountId: string;
+  externalInboxId?: string;
+}
+
+export interface ProviderCapabilities {
+  SEND_TEXT: boolean;
+  SEND_MEDIA: boolean;
+  RECEIVE_MEDIA: boolean;
+  DELIVERY_STATUS: boolean;
+  READ_STATUS: boolean;
+  THREADING: boolean;
+  TEMPLATES: boolean;
+}
 
 export interface User {
   id: string;
@@ -55,6 +84,7 @@ export interface Channel {
   organizationId: string;
   name: string;
   type: ChannelType;
+  providerType?: ProviderType;
   status: "CONNECTED" | "ATTENTION";
   conversations: number;
 }
@@ -63,12 +93,32 @@ export interface Message {
   organizationId?: string;
   id: string;
   externalId?: string;
+  externalMessageId?: string;
   conversationId: string;
+  channelType?: ChannelType;
+  providerType?: ProviderType;
+  direction?: MessageDirection;
+  senderIdentity?: string;
+  recipientIdentity?: string;
   sender: "CONTACT" | "AGENT" | "SYSTEM";
   authorName: string;
   body: string;
+  messageType?: MessageType;
+  deliveryStatus?: DeliveryStatus;
+  providerCreatedAt?: string;
+  attachments?: Attachment[];
   createdAt: string;
   internal?: boolean;
+}
+
+export interface Attachment {
+  id: string;
+  messageId: string;
+  externalUrl?: string;
+  mimeType: string;
+  filename?: string;
+  size?: number;
+  providerAssetId?: string;
 }
 
 export interface Conversation {
@@ -77,12 +127,30 @@ export interface Conversation {
   contactId: string;
   channelId: string;
   externalId?: string;
+  externalConversationId?: string;
+  channelType?: ChannelType;
+  providerType?: ProviderType;
+  channelConnectionId?: string;
   status: ConversationStatus;
   assignedToId?: string;
   unread: number;
   lastMessage: string;
   lastMessageAt: string;
   messages: Message[];
+}
+
+export interface ContactIdentity {
+  id: string;
+  organizationId: string;
+  contactId: string;
+  channelType: ChannelType;
+  providerType: ProviderType;
+  channelConnectionId: string;
+  externalContactId: string;
+  address?: string;
+  username?: string;
+  phone?: string;
+  email?: string;
 }
 
 export interface PipelineStage {
@@ -133,7 +201,7 @@ export const signupSchema = z.object({ name: z.string().trim().min(2).max(120), 
 export const inviteSchema = z.object({ email: z.string().email(), role: roleSchema });
 export const acceptInviteSchema = z.object({ name: z.string().trim().min(2).max(120), password: z.string().min(8).max(200) });
 export const organizationSettingsSchema = z.object({ name: z.string().trim().min(2).max(160).optional(), timezone: z.string().min(1).max(100).optional(), onboardingStep: z.enum(["COMPANY", "TEAM", "CHANNEL", "DONE"]).optional(), onboardingCompleted: z.boolean().optional() });
-export const integrationSchema = z.object({ id: z.string().optional(), provider: z.enum(["mock", "chatwoot"]), displayName: z.string().trim().min(2).max(120), baseUrl: z.string().url(), externalAccountId: z.string().trim().min(1).max(100), apiToken: z.string().max(1000), webhookSecret: z.string().max(1000).optional() });
+export const integrationSchema = z.object({ id: z.string().optional(), provider: z.enum(["mock", "chatwoot"]), displayName: z.string().trim().min(2).max(120), baseUrl: z.string().url(), externalAccountId: z.string().trim().min(1).max(100), providerInboxId: z.string().trim().max(100).optional(), channelType: channelTypeSchema.optional(), apiToken: z.string().max(1000), webhookSecret: z.string().max(1000).optional() });
 export const memberUpdateSchema = z.object({ role: roleSchema.optional(), status: z.enum(["ACTIVE", "DISABLED"]).optional() });
 
 export const sendMessageSchema = z.object({
@@ -157,6 +225,8 @@ export const createOpportunitySchema = z.object({
 
 export interface MessagingProvider {
   readonly name: string;
+  readonly providerType: ProviderType;
+  capabilities(context: ProviderContext): ProviderCapabilities;
   sendMessage(input: { conversationId: string; externalConversationId?: string; body: string; internal?: boolean }): Promise<NormalizedOutgoingMessage>;
   normalizeConversation(input: unknown): Conversation;
   normalizeMessage(input: unknown): Message;
@@ -172,6 +242,8 @@ export interface NormalizedOutgoingMessage {
   sender: "AGENT";
   authorName: string;
   internal?: boolean;
+  messageType?: MessageType;
+  deliveryStatus?: DeliveryStatus;
 }
 
 export interface NormalizedWebhookEvent {
@@ -179,6 +251,14 @@ export interface NormalizedWebhookEvent {
   externalAccountId: string;
   externalConversationId: string;
   externalMessageId?: string;
+  externalContactId?: string;
+  externalChannelId?: string;
+  channelName?: string;
+  channelType?: ChannelType;
+  providerType?: ProviderType;
+  status?: Conversation["status"];
+  messageType?: MessageType;
+  direction?: MessageDirection;
   body: string;
   createdAt: string;
   sender: "CONTACT" | "AGENT";

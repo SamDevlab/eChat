@@ -8,7 +8,14 @@ export const validateBaseUrl = (value: string): string => {
   return parsed.toString().replace(/\/$/, "");
 };
 
-export const sanitizedProviderError = (status: number, message = "Erro no provider"): string => {
+export const sanitizedProviderError = (status: number, message = "Erro no provider", providerCode?: string): string => {
+  if (providerCode === "AUTHENTICATION_ERROR") return "AUTHENTICATION_FAILED";
+  if (providerCode === "RATE_LIMITED") return "RATE_LIMITED";
+  if (providerCode === "TIMEOUT") return "TIMEOUT";
+  if (providerCode === "PROVIDER_UNAVAILABLE") return "PROVIDER_UNAVAILABLE";
+  if (providerCode === "INVALID_RESPONSE") return "INVALID_RESPONSE";
+  if (providerCode === "UNSUPPORTED_CHANNEL") return "UNSUPPORTED_CHANNEL";
+  if (providerCode === "CONFIGURATION_ERROR") return "CONFIGURATION_ERROR";
   if (status === 401) return "AUTHENTICATION_FAILED";
   if (status === 403) return "FORBIDDEN";
   if (status === 404) return "ACCOUNT_NOT_FOUND";
