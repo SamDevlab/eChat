@@ -18,7 +18,7 @@ export type OpportunityStage = z.infer<typeof opportunityStageSchema>;
 
 export const channelTypeSchema = z.enum(["WHATSAPP", "WEBCHAT", "EMAIL", "INSTAGRAM", "UNKNOWN"]);
 export type ChannelType = z.infer<typeof channelTypeSchema>;
-export const supportedChannelTypeSchema = z.enum(["WHATSAPP", "INSTAGRAM", "EMAIL"]);
+export const supportedChannelTypeSchema = z.enum(["WHATSAPP", "WEBCHAT", "INSTAGRAM", "EMAIL"]);
 export type SupportedChannelType = z.infer<typeof supportedChannelTypeSchema>;
 export const providerTypeSchema = z.enum(["CHATWOOT", "MOCK"]);
 export type ProviderType = z.infer<typeof providerTypeSchema>;
@@ -251,8 +251,12 @@ export interface NormalizedWebhookEvent {
   externalAccountId: string;
   externalConversationId: string;
   externalMessageId?: string;
+  externalContactId?: string;
+  externalChannelId?: string;
+  channelName?: string;
   channelType?: ChannelType;
   providerType?: ProviderType;
+  status?: Conversation["status"];
   messageType?: MessageType;
   direction?: MessageDirection;
   body: string;

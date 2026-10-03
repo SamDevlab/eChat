@@ -69,6 +69,21 @@ describe("Chatwoot adapter", () => {
     expect(fetchMock.mock.calls[2][1]).toEqual(expect.objectContaining({ method: "POST", body: JSON.stringify({ name: "eChat", url: "https://pilot.example/api/v1/webhooks/chatwoot", subscriptions: ["message_created"] }) }));
   });
 
+  it("reads Chatwoot 4.18 webhook registration from payload.webhook", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ payload: { webhook: { id: 12, secret: "generated-webhook-secret" } } }), { status: 200 })));
+    await expect(new ChatwootProvider({ baseUrl: "https://chatwoot.example", token: "secret", accountId: "77" }).registerWebhook!("https://pilot.example/api/v1/webhooks/chatwoot")).resolves.toEqual({ id: "12", secret: "generated-webhook-secret" });
+  });
+
+  it("maps Chatwoot website widget conversations to WEBCHAT", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { payload: [{ id: 88, inbox_id: 3, status: "open", meta: { sender: { id: 10 }, channel: "Channel::WebWidget" }, inbox: { name: "Lab Website", channel_type: "Channel::WebWidget" }, last_activity_at: 1_700_000_000 }] } }), { status: 200 })));
+    await expect(new ChatwootProvider({ baseUrl: "https://chatwoot.example", token: "secret", accountId: "77" }).listConversations(1)).resolves.toMatchObject({ items: [expect.objectContaining({ externalId: "88", channelType: "WEBCHAT" })] });
+  });
+
+  it("normalizes a new Website Widget webhook with contact and inbox identity", () => {
+    const provider = new ChatwootProvider({ baseUrl: "https://chatwoot.example", token: "secret", accountId: "77" });
+    expect(provider.normalizeWebhook({ event: "message_created", id: "event-1", account: { id: 77 }, inbox: { id: 3, name: "Lab Website" }, conversation: { id: 88, inbox_id: 3, status: "open", channel: "Channel::WebWidget", meta: { sender: { id: 10, name: "Widget Visitor", email: null, phone_number: null } }, inbox: { id: 3, name: "Lab Website" } }, message: { id: 901, content: "inbound", message_type: "incoming", created_at: 1_700_000_000, sender: { id: 10, name: "Widget Visitor", email: null, phone_number: null } } })).toEqual([expect.objectContaining({ externalAccountId: "77", externalConversationId: "88", externalMessageId: "901", externalContactId: "10", externalChannelId: "3", channelName: "Lab Website", channelType: "WEBCHAT", status: "OPEN", sender: "CONTACT", body: "inbound" })]);
+  });
+
   it("verifies a timestamped webhook signature with the integration secret", () => {
     const secret = "webhook-secret"; const timestamp = String(Math.floor(Date.now() / 1000)); const rawBody = JSON.stringify({ event: "message_created" }); const signature = `sha256=${createHmac("sha256", secret).update(`${timestamp}.${rawBody}`).digest("hex")}`;
     const provider = new ChatwootProvider({ baseUrl: "https://chatwoot.example", token: "secret", accountId: "77", webhookSecret: secret });
@@ -81,13 +96,18 @@ describe("Chatwoot adapter", () => {
     await expect(new ChatwootProvider({ baseUrl: "https://chatwoot.example", token: "secret", accountId: "77" }).listWebhooks()).resolves.toEqual([{ id: "12", url: "https://pilot.example/api/v1/webhooks/chatwoot", secret: undefined, subscriptions: ["message_created"] }]);
   });
 
+  it("reads the webhook list from Chatwoot's payload.webhooks envelope", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ payload: { webhooks: [{ id: 12, url: "https://pilot.example/api/v1/webhooks/chatwoot", subscriptions: ["message_created"] }] } }), { status: 200 })));
+    await expect(new ChatwootProvider({ baseUrl: "https://chatwoot.example", token: "secret", accountId: "77" }).listWebhooks()).resolves.toEqual([{ id: "12", url: "https://pilot.example/api/v1/webhooks/chatwoot", secret: undefined, subscriptions: ["message_created"] }]);
+  });
+
   it("does not treat a webhook registration without an id as successful", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 })));
     await expect(new ChatwootProvider({ baseUrl: "https://chatwoot.example", token: "secret", accountId: "77" }).registerWebhook!("https://pilot.example/api/v1/webhooks/chatwoot")).rejects.toThrow("Resposta inválida");
   });
 
   it("rejects frozen or unknown Chatwoot channels explicitly", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ payload: [{ id: 88, status: "open", meta: { sender: { id: 10 }, channel: "Channel::WebWidget" } }] }), { status: 200 })));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ payload: [{ id: 88, status: "open", meta: { sender: { id: 10 }, channel: "Channel::Sms" } }] }), { status: 200 })));
     await expect(new ChatwootProvider({ baseUrl: "https://chatwoot.example", token: "secret", accountId: "77" }).listConversations(1)).rejects.toMatchObject({ code: "UNSUPPORTED_CHANNEL" });
   });
 });
