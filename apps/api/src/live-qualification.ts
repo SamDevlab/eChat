@@ -1,26 +1,27 @@
 export type ReadOnlyChatwootProvider = {
   testConnection(): Promise<{ accountId: string; name?: string }>;
+  listInboxes(): Promise<Array<{ id: string; name: string }>>;
   listContacts(page: number): Promise<{ items: unknown[]; hasNextPage: boolean }>;
-  listConversations(page: number): Promise<{ items: Array<{ channelExternalId?: string }>; hasNextPage: boolean }>;
-  listWebhooks?(): Promise<Array<{ id: string; url: string; secret?: string }>>;
+  listConversations(page: number): Promise<{ items: unknown[]; hasNextPage: boolean }>;
+  listWebhooks(): Promise<Array<{ id: string; url: string; subscriptions: string[] }>>;
 };
 
 export type ChatwootQualificationOptions = {
   expectedAccountId: string;
-  expectedInboxId?: string;
-  expectedWebhookUrl?: string;
-  requireWebhookMatch?: boolean;
+  expectedInboxId: string;
+  expectedWebhookUrl: string;
 };
 
 export type ChatwootQualificationReport = {
   pass: boolean;
   accountMatch: boolean;
   accountName?: string;
+  inboxMatch: "PASS" | "FAIL";
+  inboxCount: number;
   contactsOnFirstPage: number;
   conversationsOnFirstPage: number;
-  inboxMatch: "PASS" | "FAIL" | "SKIPPED" | "EMPTY_PAGE";
-  webhookMatch: "PASS" | "FAIL" | "SKIPPED";
-  webhookCount?: number;
+  webhookMatch: "PASS" | "FAIL";
+  webhookCount: number;
   mode: "READ_ONLY";
 };
 
@@ -34,49 +35,34 @@ export const qualifyChatwootReadOnly = async (
   provider: ReadOnlyChatwootProvider,
   options: ChatwootQualificationOptions,
 ): Promise<ChatwootQualificationReport> => {
-  const account = await provider.testConnection();
+  const [account, inboxes, contacts, conversations, webhooks] = await Promise.all([
+    provider.testConnection(),
+    provider.listInboxes(),
+    provider.listContacts(1),
+    provider.listConversations(1),
+    provider.listWebhooks(),
+  ]);
   const accountMatch = String(account.accountId) === String(options.expectedAccountId);
+  const inboxMatch = inboxes.some((item) => String(item.id) === String(options.expectedInboxId));
+  const expected = normalizedUrl(options.expectedWebhookUrl);
+  const webhookMatch = webhooks.some((item) => {
+    try {
+      return normalizedUrl(item.url) === expected && item.subscriptions.includes("message_created");
+    } catch {
+      return false;
+    }
+  });
 
-  const contacts = await provider.listContacts(1);
-  const conversations = await provider.listConversations(1);
-
-  let inboxMatch: ChatwootQualificationReport["inboxMatch"] = "SKIPPED";
-  if (options.expectedInboxId) {
-    inboxMatch = conversations.items.length === 0
-      ? "EMPTY_PAGE"
-      : conversations.items.every(
-        (item) => String(item.channelExternalId ?? "") === String(options.expectedInboxId),
-      )
-        ? "PASS"
-        : "FAIL";
-  }
-
-  let webhookMatch: ChatwootQualificationReport["webhookMatch"] = "SKIPPED";
-  let webhookCount: number | undefined;
-  if (options.expectedWebhookUrl) {
-    const webhooks = provider.listWebhooks ? await provider.listWebhooks() : [];
-    webhookCount = webhooks.length;
-    const expected = normalizedUrl(options.expectedWebhookUrl);
-    webhookMatch = webhooks.some((item) => {
-      try {
-        return normalizedUrl(item.url) === expected;
-      } catch {
-        return false;
-      }
-    }) ? "PASS" : "FAIL";
-  }
-
-  const webhookPass = !options.requireWebhookMatch || webhookMatch === "PASS";
-  const inboxPass = inboxMatch !== "FAIL";
   return {
-    pass: accountMatch && inboxPass && webhookPass,
+    pass: accountMatch && inboxMatch && webhookMatch,
     accountMatch,
     accountName: account.name,
+    inboxMatch: inboxMatch ? "PASS" : "FAIL",
+    inboxCount: inboxes.length,
     contactsOnFirstPage: contacts.items.length,
     conversationsOnFirstPage: conversations.items.length,
-    inboxMatch,
-    webhookMatch,
-    webhookCount,
+    webhookMatch: webhookMatch ? "PASS" : "FAIL",
+    webhookCount: webhooks.length,
     mode: "READ_ONLY",
   };
 };

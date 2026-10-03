@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gt, ilike, inArray, isNull, or } from "drizzle-orm";
+import { and, count, desc, eq, gt, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { Database } from "@echat/db";
 import { authSessions, channels, contactIdentities, contactTags, contacts, conversations, integrationAccounts, messages, opportunities, opportunityActivities, organizationInvites, opportunityConversations, organizationMembers, organizations, pipelineStages, pipelines, tags, users, webhookEvents } from "@echat/db";
@@ -157,13 +157,40 @@ export class Repositories {
     return this.getConversation(organizationId, conversationId);
   }
 
-  async insertOutgoingMessage(input: { organizationId: string; conversationId: string; channelConnectionId?: string; channelType?: ChannelType; providerType?: ProviderType; externalId?: string; body: string; authorName: string; createdAt: Date; internal: boolean; senderIdentity?: string; recipientIdentity?: string; deliveryStatus?: DeliveryStatus }) {
+  async markConversationRead(organizationId: string, conversationId: string) {
+    await this.db.update(conversations).set({ unread: 0, updatedAt: new Date() }).where(and(eq(conversations.organizationId, organizationId), eq(conversations.id, conversationId)));
+    return this.getConversation(organizationId, conversationId);
+  }
+
+  async reserveOutgoingMessage(input: { organizationId: string; conversationId: string; channelConnectionId?: string; channelType?: ChannelType; providerType?: ProviderType; idempotencyKey: string; body: string; authorName: string; internal: boolean }) {
     return this.db.transaction(async (tx) => {
-      const row = { id: randomUUID(), organizationId: input.organizationId, conversationId: input.conversationId, channelConnectionId: input.channelConnectionId ?? null, channelType: input.channelType ?? null, providerType: input.providerType ?? null, externalId: input.externalId ?? null, direction: "OUTBOUND", senderIdentity: input.senderIdentity ?? null, recipientIdentity: input.recipientIdentity ?? null, sender: "AGENT", authorName: input.authorName, body: input.body, messageType: "TEXT", deliveryStatus: input.deliveryStatus ?? "SENT", providerCreatedAt: input.createdAt, internal: input.internal, createdAt: input.createdAt };
-      await tx.insert(messages).values(row);
-      await tx.update(conversations).set({ lastMessage: input.body, lastMessageAt: input.createdAt, updatedAt: new Date() }).where(and(eq(conversations.organizationId, input.organizationId), eq(conversations.id, input.conversationId)));
+      const now = new Date();
+      const row = { id: randomUUID(), organizationId: input.organizationId, conversationId: input.conversationId, channelConnectionId: input.channelConnectionId ?? null, channelType: input.channelType ?? null, providerType: input.providerType ?? null, externalId: null, idempotencyKey: input.idempotencyKey, direction: "OUTBOUND", senderIdentity: null, recipientIdentity: null, sender: "AGENT", authorName: input.authorName, body: input.body, messageType: "TEXT", deliveryStatus: "PENDING", providerCreatedAt: now, internal: input.internal, createdAt: now };
+      const inserted = await tx.insert(messages).values(row).onConflictDoNothing({ target: [messages.organizationId, messages.conversationId, messages.idempotencyKey] }).returning();
+      if (inserted.length) return { message: toMessage(inserted[0]), created: true };
+      const existing = (await tx.select().from(messages).where(and(eq(messages.organizationId, input.organizationId), eq(messages.conversationId, input.conversationId), eq(messages.idempotencyKey, input.idempotencyKey))).limit(1))[0];
+      if (!existing) throw new Error("IDEMPOTENCY_RECORD_UNAVAILABLE");
+      return { message: toMessage(existing), created: false };
+    });
+  }
+
+  async completeOutgoingMessage(input: { organizationId: string; conversationId: string; messageId: string; externalId?: string; body: string; createdAt: Date; deliveryStatus: DeliveryStatus }) {
+    return this.db.transaction(async (tx) => {
+      const updated = await tx.update(messages).set({ externalId: input.externalId ?? null, body: input.body, deliveryStatus: input.deliveryStatus, createdAt: input.createdAt, providerCreatedAt: input.createdAt }).where(and(eq(messages.organizationId, input.organizationId), eq(messages.conversationId, input.conversationId), eq(messages.id, input.messageId))).returning();
+      const row = updated[0];
+      if (!row) return null;
+      await tx.update(conversations).set({
+        lastMessage: sql`CASE WHEN ${conversations.lastMessageAt} <= ${input.createdAt.toISOString()}::timestamptz THEN ${input.body} ELSE ${conversations.lastMessage} END`,
+        lastMessageAt: sql`GREATEST(${conversations.lastMessageAt}, ${input.createdAt.toISOString()}::timestamptz)`,
+        updatedAt: new Date(),
+      }).where(and(eq(conversations.organizationId, input.organizationId), eq(conversations.id, input.conversationId)));
       return toMessage(row);
     });
+  }
+
+  async failOutgoingMessage(organizationId: string, messageId: string) {
+    const rows = await this.db.update(messages).set({ deliveryStatus: "FAILED" }).where(and(eq(messages.organizationId, organizationId), eq(messages.id, messageId))).returning();
+    return rows[0] ? toMessage(rows[0]) : null;
   }
 
   async listStages(organizationId: string): Promise<PipelineStage[]> { return (await this.db.select().from(pipelineStages).where(eq(pipelineStages.organizationId, organizationId)).orderBy(pipelineStages.position)).map(toStage); }
@@ -207,7 +234,7 @@ export class Repositories {
   }
 
   async upsertSyncedContact(input: { organizationId: string; channelConnectionId?: string; externalId: string; name: string; email: string; phone: string; ownerId: string }) {
-    const scopedExternalId = input.channelConnectionId ? `${input.channelConnectionId}:${input.externalId}` : input.externalId; const existing = (await this.db.select().from(contacts).where(and(eq(contacts.organizationId, input.organizationId), or(eq(contacts.externalId, scopedExternalId), eq(contacts.externalId, input.externalId)))).limit(1))[0];
+    const scopedExternalId = input.channelConnectionId ? `${input.channelConnectionId}:${input.externalId}` : input.externalId; const existing = (await this.db.select().from(contacts).where(and(eq(contacts.organizationId, input.organizationId), eq(contacts.externalId, scopedExternalId))).limit(1))[0];
     if (existing) { const updated = await this.db.update(contacts).set({ name: input.name || "Contato Chatwoot", email: input.email, phone: input.phone, updatedAt: new Date() }).where(and(eq(contacts.organizationId, input.organizationId), eq(contacts.id, existing.id))).returning(); return updated[0]; }
     const row = await this.db.insert(contacts).values({ id: `contact-${input.organizationId}-${scopedExternalId}`, organizationId: input.organizationId, externalId: scopedExternalId, name: input.name || "Contato Chatwoot", company: "", phone: input.phone, email: input.email, ownerId: input.ownerId, notes: "Importado do Chatwoot", lastConversationAt: new Date() }).returning();
     return row[0];
@@ -223,7 +250,7 @@ export class Repositories {
   }
   async upsertSyncedConversation(input: { organizationId: string; channelConnectionId: string; channelType: ChannelType; providerType: ProviderType; externalId: string; contactId: string; channelId: string; status: string; assignedToId?: string; lastMessage: string; lastMessageAt: Date }) {
     const existing = (await this.db.select().from(conversations).where(and(eq(conversations.organizationId, input.organizationId), eq(conversations.channelConnectionId, input.channelConnectionId), eq(conversations.externalId, input.externalId))).limit(1))[0];
-    if (existing) { await this.db.update(conversations).set({ channelConnectionId: input.channelConnectionId, channelType: input.channelType, providerType: input.providerType, contactId: input.contactId, channelId: input.channelId, status: input.status, assignedToId: input.assignedToId ?? null, lastMessage: input.lastMessage, lastMessageAt: input.lastMessageAt, updatedAt: new Date() }).where(and(eq(conversations.organizationId, input.organizationId), eq(conversations.id, existing.id))); return existing.id; }
+    if (existing) { await this.db.update(conversations).set({ channelConnectionId: input.channelConnectionId, channelType: input.channelType, providerType: input.providerType, contactId: input.contactId, channelId: input.channelId, status: input.status, ...(input.assignedToId ? { assignedToId: input.assignedToId } : {}), lastMessage: sql`CASE WHEN ${conversations.lastMessageAt} <= ${input.lastMessageAt.toISOString()}::timestamptz THEN ${input.lastMessage} ELSE ${conversations.lastMessage} END`, lastMessageAt: sql`GREATEST(${conversations.lastMessageAt}, ${input.lastMessageAt.toISOString()}::timestamptz)`, updatedAt: new Date() }).where(and(eq(conversations.organizationId, input.organizationId), eq(conversations.id, existing.id))); return existing.id; }
     const row = await this.db.insert(conversations).values({ id: `conversation-${input.organizationId}-${input.channelConnectionId}-${input.externalId}`, organizationId: input.organizationId, externalId: input.externalId, channelConnectionId: input.channelConnectionId, channelType: input.channelType, providerType: input.providerType, contactId: input.contactId, channelId: input.channelId, status: input.status, assignedToId: input.assignedToId ?? null, unread: 0, lastMessage: input.lastMessage, lastMessageAt: input.lastMessageAt }).returning({ id: conversations.id });
     return row[0].id;
   }
@@ -267,7 +294,7 @@ export class Repositories {
     const row = (await this.db.select().from(integrationAccounts).where(and(eq(integrationAccounts.provider, provider), eq(integrationAccounts.externalAccountId, externalAccountId), inArray(integrationAccounts.status, ["ACTIVE", "CONNECTED"]))).limit(1))[0];
     return row ? toIntegration(row) : null;
   }
-  async findIntegrationByExternalAccountId(externalAccountId: string) { const row = (await this.db.select().from(integrationAccounts).where(and(eq(integrationAccounts.provider, "chatwoot"), eq(integrationAccounts.externalAccountId, externalAccountId), inArray(integrationAccounts.status, ["ACTIVE", "CONNECTED"]))).limit(1))[0]; return row ? toIntegration(row) : null; }
+  async findIntegrationsByExternalAccountId(externalAccountId: string): Promise<IntegrationRecord[]> { const rows = await this.db.select().from(integrationAccounts).where(and(eq(integrationAccounts.provider, "chatwoot"), eq(integrationAccounts.externalAccountId, externalAccountId), inArray(integrationAccounts.status, ["ACTIVE", "CONNECTED", "DEGRADED"]))); return rows.map(toIntegration); }
 
   async claimWebhookEvent(input: { organizationId: string; integrationAccountId: string; provider: string; externalEventId: string; payloadHash: string }): Promise<boolean> {
     const inserted = await this.db.insert(webhookEvents).values({ id: randomUUID(), ...input }).onConflictDoNothing({ target: [webhookEvents.integrationAccountId, webhookEvents.externalEventId] }).returning({ id: webhookEvents.id });
@@ -281,11 +308,22 @@ export class Repositories {
   async findMessageByExternalId(organizationId: string, externalId: string, channelConnectionId?: string) { return (await this.db.select().from(messages).where(and(eq(messages.organizationId, organizationId), ...(channelConnectionId ? [eq(messages.channelConnectionId, channelConnectionId)] : []), eq(messages.externalId, externalId))).limit(1))[0] ?? null; }
   async insertInboundMessage(input: { organizationId: string; conversationId: string; channelConnectionId?: string; channelType?: ChannelType; providerType?: ProviderType; externalId?: string; body: string; authorName: string; createdAt: Date; messageType?: MessageType; deliveryStatus?: DeliveryStatus }) {
     return this.db.transaction(async (tx) => {
-      if (input.externalId) { const existing = await tx.select().from(messages).where(and(eq(messages.organizationId, input.organizationId), ...(input.channelConnectionId ? [eq(messages.channelConnectionId, input.channelConnectionId)] : []), eq(messages.externalId, input.externalId))).limit(1); if (existing.length) return toMessage(existing[0]); }
-      const row = { id: randomUUID(), organizationId: input.organizationId, conversationId: input.conversationId, channelConnectionId: input.channelConnectionId ?? null, channelType: input.channelType ?? null, providerType: input.providerType ?? null, externalId: input.externalId ?? null, direction: "INBOUND", senderIdentity: null, recipientIdentity: null, sender: "CONTACT", authorName: input.authorName, body: input.body, messageType: input.messageType ?? "TEXT", deliveryStatus: input.deliveryStatus ?? "DELIVERED", providerCreatedAt: input.createdAt, internal: false, createdAt: input.createdAt };
-      await tx.insert(messages).values(row);
-      await tx.update(conversations).set({ lastMessage: input.body, lastMessageAt: input.createdAt, updatedAt: new Date() }).where(and(eq(conversations.organizationId, input.organizationId), eq(conversations.id, input.conversationId)));
-      return toMessage(row);
+      const row = { id: randomUUID(), organizationId: input.organizationId, conversationId: input.conversationId, channelConnectionId: input.channelConnectionId ?? null, channelType: input.channelType ?? null, providerType: input.providerType ?? null, externalId: input.externalId ?? null, idempotencyKey: null, direction: "INBOUND", senderIdentity: null, recipientIdentity: null, sender: "CONTACT", authorName: input.authorName, body: input.body, messageType: input.messageType ?? "TEXT", deliveryStatus: input.deliveryStatus ?? "DELIVERED", providerCreatedAt: input.createdAt, internal: false, createdAt: input.createdAt };
+      const inserted = await tx.insert(messages).values(row).onConflictDoNothing().returning();
+      if (!inserted.length) {
+        if (input.externalId) {
+          const existing = (await tx.select().from(messages).where(and(eq(messages.organizationId, input.organizationId), ...(input.channelConnectionId ? [eq(messages.channelConnectionId, input.channelConnectionId)] : []), eq(messages.externalId, input.externalId))).limit(1))[0];
+          if (existing) return { message: toMessage(existing), created: false };
+        }
+        throw new Error("INBOUND_MESSAGE_CONFLICT");
+      }
+      await tx.update(conversations).set({
+        lastMessage: sql`CASE WHEN ${conversations.lastMessageAt} <= ${input.createdAt.toISOString()}::timestamptz THEN ${input.body} ELSE ${conversations.lastMessage} END`,
+        lastMessageAt: sql`GREATEST(${conversations.lastMessageAt}, ${input.createdAt.toISOString()}::timestamptz)`,
+        unread: sql`${conversations.unread} + 1`,
+        updatedAt: new Date(),
+      }).where(and(eq(conversations.organizationId, input.organizationId), eq(conversations.id, input.conversationId)));
+      return { message: toMessage(inserted[0]), created: true };
     });
   }
 }

@@ -77,8 +77,8 @@ describe("Chatwoot adapter", () => {
   });
 
   it("reads existing webhooks without exposing credentials in the adapter result", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify([{ id: 12, url: "https://pilot.example/api/v1/webhooks/chatwoot" }]), { status: 200 })));
-    await expect(new ChatwootProvider({ baseUrl: "https://chatwoot.example", token: "secret", accountId: "77" }).listWebhooks()).resolves.toEqual([{ id: "12", url: "https://pilot.example/api/v1/webhooks/chatwoot", secret: undefined }]);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ payload: [{ id: 12, url: "https://pilot.example/api/v1/webhooks/chatwoot", subscriptions: ["message_created"] }] }), { status: 200 })));
+    await expect(new ChatwootProvider({ baseUrl: "https://chatwoot.example", token: "secret", accountId: "77" }).listWebhooks()).resolves.toEqual([{ id: "12", url: "https://pilot.example/api/v1/webhooks/chatwoot", secret: undefined, subscriptions: ["message_created"] }]);
   });
 
   it("does not treat a webhook registration without an id as successful", async () => {

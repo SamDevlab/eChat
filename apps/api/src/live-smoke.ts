@@ -1,8 +1,11 @@
 import { ChatwootProvider } from "./providers.js";
 import { qualifyChatwootReadOnly } from "./live-qualification.js";
 
-const required = ["CHATWOOT_BASE_URL", "CHATWOOT_ACCOUNT_ID", "CHATWOOT_API_TOKEN"] as const;
-const missing = required.filter((key) => !process.env[key]?.trim());
+const required = ["CHATWOOT_BASE_URL", "CHATWOOT_ACCOUNT_ID", "CHATWOOT_API_TOKEN", "CHATWOOT_INBOX_ID"] as const;
+const missing: string[] = required.filter((key) => !process.env[key]?.trim());
+const configuredWebhookUrl = process.env.CHATWOOT_EXPECTED_WEBHOOK_URL?.trim()
+  || (process.env.PUBLIC_APP_URL?.trim() ? `${process.env.PUBLIC_APP_URL.trim().replace(/\/$/, "")}/api/v1/webhooks/chatwoot` : "");
+if (!configuredWebhookUrl) missing.push("CHATWOOT_EXPECTED_WEBHOOK_URL_OR_PUBLIC_APP_URL");
 
 if (missing.length > 0) {
   console.log("LIVE_TEST_BLOCKED_NO_LIVE_CREDENTIALS");
@@ -10,11 +13,8 @@ if (missing.length > 0) {
   process.exit(0);
 }
 
-const publicAppUrl = process.env.PUBLIC_APP_URL?.trim().replace(/\/$/, "");
-const expectedWebhookUrl = process.env.CHATWOOT_EXPECTED_WEBHOOK_URL?.trim()
-  || (publicAppUrl ? `${publicAppUrl}/api/v1/webhooks/chatwoot` : undefined);
+const expectedWebhookUrl = configuredWebhookUrl;
 const expectedInboxId = process.env.CHATWOOT_INBOX_ID?.trim() || undefined;
-const requireWebhookMatch = process.env.CHATWOOT_REQUIRE_WEBHOOK_MATCH === "1";
 
 const provider = new ChatwootProvider({
   baseUrl: process.env.CHATWOOT_BASE_URL!,
@@ -27,9 +27,8 @@ const provider = new ChatwootProvider({
 try {
   const report = await qualifyChatwootReadOnly(provider, {
     expectedAccountId: process.env.CHATWOOT_ACCOUNT_ID!,
-    expectedInboxId,
+    expectedInboxId: expectedInboxId!,
     expectedWebhookUrl,
-    requireWebhookMatch,
   });
 
   console.log(`LIVE_CONNECTION_TEST=${report.pass ? "PASS" : "FAIL"}`);
@@ -37,10 +36,9 @@ try {
   console.log(`LIVE_CONTACT_PAGE=PASS_ITEMS_${report.contactsOnFirstPage}`);
   console.log(`LIVE_CONVERSATION_PAGE=PASS_ITEMS_${report.conversationsOnFirstPage}`);
   console.log(`LIVE_INBOX_MATCH=${report.inboxMatch}`);
+  console.log(`LIVE_INBOX_COUNT=${report.inboxCount}`);
+  console.log(`LIVE_WEBHOOK_LIST=PASS_COUNT_${report.webhookCount}`);
   console.log(`LIVE_WEBHOOK_MATCH=${report.webhookMatch}`);
-  if (report.webhookCount !== undefined) console.log(`LIVE_WEBHOOK_COUNT=${report.webhookCount}`);
-  console.log(`LIVE_WEBHOOK_MATCH_REQUIRED=${requireWebhookMatch ? "YES" : "NO"}`);
-  console.log(`LIVE_WEBHOOK_SECRET_PRESENT=${process.env.CHATWOOT_WEBHOOK_SECRET ? "YES" : "NO"}`);
   console.log("LIVE_TEST_MODE=READ_ONLY");
   console.log("LIVE_TEST_OUTBOUND=NOT_RUN");
   console.log("LIVE_TEST_WEBHOOK_REGISTRATION=NOT_RUN");

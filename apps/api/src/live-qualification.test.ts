@@ -3,9 +3,10 @@ import { qualifyChatwootReadOnly, type ReadOnlyChatwootProvider } from "./live-q
 
 const provider = (overrides: Partial<ReadOnlyChatwootProvider> = {}): ReadOnlyChatwootProvider => ({
   async testConnection() { return { accountId: "77", name: "Pilot" }; },
+  async listInboxes() { return [{ id: "88", name: "Pilot inbox" }]; },
   async listContacts() { return { items: [{ id: "10" }], hasNextPage: false }; },
   async listConversations() { return { items: [{ channelExternalId: "88" }], hasNextPage: false }; },
-  async listWebhooks() { return [{ id: "w1", url: "https://pilot.example/api/v1/webhooks/chatwoot" }]; },
+  async listWebhooks() { return [{ id: "w1", url: "https://pilot.example/api/v1/webhooks/chatwoot", subscriptions: ["message_created"] }]; },
   ...overrides,
 });
 
@@ -15,7 +16,6 @@ describe("read-only Chatwoot pilot qualification", () => {
       expectedAccountId: "77",
       expectedInboxId: "88",
       expectedWebhookUrl: "https://pilot.example/api/v1/webhooks/chatwoot",
-      requireWebhookMatch: true,
     });
     expect(report).toEqual(expect.objectContaining({
       pass: true,
@@ -31,6 +31,8 @@ describe("read-only Chatwoot pilot qualification", () => {
       async testConnection() { return { accountId: "999" }; },
     }), {
       expectedAccountId: "77",
+      expectedInboxId: "88",
+      expectedWebhookUrl: "https://pilot.example/api/v1/webhooks/chatwoot",
     });
     expect(report.pass).toBe(false);
     expect(report.accountMatch).toBe(false);
@@ -41,26 +43,40 @@ describe("read-only Chatwoot pilot qualification", () => {
     const report = await qualifyChatwootReadOnly(provider({
       async listWebhooks() {
         listCalls += 1;
-        return [{ id: "w1", url: "https://other.example/webhook" }];
+        return [{ id: "w1", url: "https://other.example/webhook", subscriptions: ["message_created"] }];
       },
     }), {
       expectedAccountId: "77",
+      expectedInboxId: "88",
       expectedWebhookUrl: "https://pilot.example/api/v1/webhooks/chatwoot",
-      requireWebhookMatch: true,
     });
     expect(listCalls).toBe(1);
     expect(report.pass).toBe(false);
     expect(report.webhookMatch).toBe("FAIL");
   });
 
-  it("reports an empty inbox page without falsely proving inbox mismatch", async () => {
+  it("checks the configured inbox directly even when its conversation page is empty", async () => {
     const report = await qualifyChatwootReadOnly(provider({
       async listConversations() { return { items: [], hasNextPage: false }; },
     }), {
       expectedAccountId: "77",
       expectedInboxId: "88",
+      expectedWebhookUrl: "https://pilot.example/api/v1/webhooks/chatwoot",
     });
     expect(report.pass).toBe(true);
-    expect(report.inboxMatch).toBe("EMPTY_PAGE");
+    expect(report.inboxMatch).toBe("PASS");
+    expect(report.conversationsOnFirstPage).toBe(0);
+  });
+
+  it("requires the expected webhook to subscribe to message_created", async () => {
+    const report = await qualifyChatwootReadOnly(provider({
+      async listWebhooks() { return [{ id: "w1", url: "https://pilot.example/api/v1/webhooks/chatwoot", subscriptions: ["conversation_created"] }]; },
+    }), {
+      expectedAccountId: "77",
+      expectedInboxId: "88",
+      expectedWebhookUrl: "https://pilot.example/api/v1/webhooks/chatwoot",
+    });
+    expect(report.webhookMatch).toBe("FAIL");
+    expect(report.pass).toBe(false);
   });
 });
