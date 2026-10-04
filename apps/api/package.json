@@ -16,8 +16,8 @@
   "dependencies": {
     "@echat/db": "0.1.0",
     "@echat/shared": "0.1.0",
-    "drizzle-orm": "^0.38.3",
     "@types/node": "^22.10.2",
+    "drizzle-orm": "^0.45.3",
     "zod": "^3.24.1"
   }
 }

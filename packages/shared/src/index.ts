@@ -77,6 +77,7 @@ export interface Contact {
   lastConversationAt: string;
   opportunities: number;
   notes: string;
+  identities: Array<Pick<ContactIdentity, "channelType" | "phone" | "email" | "username">>;
 }
 
 export interface Channel {
@@ -200,7 +201,7 @@ export const loginSchema = z.object({
 export const signupSchema = z.object({ name: z.string().trim().min(2).max(120), email: z.string().email(), password: z.string().min(8).max(200), organizationName: z.string().trim().min(2).max(160) });
 export const inviteSchema = z.object({ email: z.string().email(), role: roleSchema });
 export const acceptInviteSchema = z.object({ name: z.string().trim().min(2).max(120), password: z.string().min(8).max(200) });
-export const organizationSettingsSchema = z.object({ name: z.string().trim().min(2).max(160).optional(), timezone: z.string().min(1).max(100).optional(), onboardingStep: z.enum(["COMPANY", "TEAM", "CHANNEL", "DONE"]).optional(), onboardingCompleted: z.boolean().optional() });
+export const organizationSettingsSchema = z.object({ name: z.string().trim().min(2).max(160).optional(), timezone: z.string().min(1).max(100).optional(), onboardingStep: z.enum(["COMPANY", "TEAM", "CHANNEL", "TEST", "DONE"]).optional(), onboardingCompleted: z.boolean().optional() });
 export const integrationSchema = z.object({ id: z.string().optional(), provider: z.enum(["mock", "chatwoot"]), displayName: z.string().trim().min(2).max(120), baseUrl: z.string().url(), externalAccountId: z.string().trim().min(1).max(100), providerInboxId: z.string().trim().max(100).optional(), channelType: channelTypeSchema.optional(), apiToken: z.string().max(1000), webhookSecret: z.string().max(1000).optional() });
 export const memberUpdateSchema = z.object({ role: roleSchema.optional(), status: z.enum(["ACTIVE", "DISABLED"]).optional() });
 

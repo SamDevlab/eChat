@@ -18,15 +18,12 @@ Identidades externas são vinculadas por organização, conexão e ID externo em
 
 ## Desenvolvimento local
 
-PostgreSQL nativo é obrigatório para a API:
+PostgreSQL nativo é obrigatório para a API. Para o LAB local, copie `.env.example` para `.env` e mantenha as duas URLs no banco isolado `echat_test`, com `DATABASE_ENV=TEST`:
 
 ```powershell
-$env:DATABASE_URL="postgres://usuario:senha@localhost:5432/echat"
-$env:APP_URL="http://localhost:5173"
-$env:INTEGRATION_ENCRYPTION_KEY="<32-byte-hex-key>"
-npm install
+npm ci
+Copy-Item .env.example .env
 npm run db:migrate
-npm run db:seed
 npm run dev
 ```
 
@@ -36,9 +33,9 @@ Abra `http://localhost:5173` e use **Criar um novo workspace** para iniciar sem 
 - `admin@echat.local` / `local-only`
 - `agente@echat.local` / `local-only`
 
-O seed é idempotente e é bloqueado quando `NODE_ENV=production`. Para testes de banco, configure um banco separado em `DATABASE_URL_TEST` e execute `npm run test:integration`; sem essa variável, o gate é reportado como bloqueado, sem tocar no banco de desenvolvimento.
+O seed é bloqueado em produção e exige `DATABASE_ENV=TEST`, `DATABASE_URL` em `echat_test` e autorização local explícita `ECHAT_ALLOW_DEMO_SEED=1`. Para testes de banco, `DATABASE_URL_TEST` também deve apontar somente para `echat_test`; sem essa variável, o gate é ignorado sem tocar em outro banco.
 
-`INTEGRATION_ENCRYPTION_KEY` deve conter 32 bytes em hexadecimal (64 caracteres) ou Base64. Tokens de integração e segredos de webhook são cifrados com AES-256-GCM no servidor; não coloque valores reais em `.env.example`, commits ou logs. O formulário de Canais permite configurar Chatwoot por organização, testar a conta e iniciar sincronização de contatos, conversas e mensagens. Em desenvolvimento, HTTP só é aceito para `localhost`; em produção, use HTTPS.
+`INTEGRATION_ENCRYPTION_KEY` deve conter 32 bytes em hexadecimal (64 caracteres) ou Base64. Tokens de integração e segredos de webhook são cifrados com AES-256-GCM no servidor; após salvar, não são retornados ao navegador. Não coloque valores reais em `.env.example`, commits ou logs. O formulário de Canais permite configurar Chatwoot por organização, testar a conta e iniciar sincronização de contatos, conversas e mensagens. Em desenvolvimento, HTTP só é aceito para `localhost`; em produção, use HTTPS.
 
 ## Comandos
 
@@ -62,6 +59,16 @@ Chatwoot é opcional. A conexão customer-ready é configurada em **Canais** por
 `npm run test:live` é um probe opt-in e somente leitura: exige `CHATWOOT_BASE_URL`, `CHATWOOT_ACCOUNT_ID` e `CHATWOOT_API_TOKEN`, valida a conta e lê a primeira página de contatos e conversas. Sem essas variáveis, termina com `LIVE_TEST_BLOCKED_NO_LIVE_CREDENTIALS` sem tocar no Chatwoot. Ele nunca envia mensagem nem registra webhook; o fluxo completo usa **Canais** após configurar a integração, uma `PUBLIC_APP_URL` HTTPS pública e um contato/conversa de teste explicitamente autorizado. O segredo retornado no registro do webhook é persistido apenas cifrado com `INTEGRATION_ENCRYPTION_KEY`.
 
 O design system de referência permanece congelado em [`docs/design-system.md`](docs/design-system.md). Exportação de screenshots é um passo manual e não faz parte deste gate.
+
+## Guias do piloto
+
+- [Instalação](docs/commercial-pilot-installation.md)
+- [Atendentes](docs/operator-guide.md)
+- [Administradores](docs/admin-guide.md)
+- [Checklist do piloto](docs/commercial-pilot-checklist.md)
+- [Atualizações](docs/update-procedure.md)
+- [Preparação WhatsApp/Instagram](docs/channel-preparation.md)
+- [Auditoria de dependências](docs/dependency-audit.md)
 
 
 ## Qualificação read-only do Chatwoot

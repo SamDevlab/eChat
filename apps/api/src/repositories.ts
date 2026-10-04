@@ -12,7 +12,7 @@ export type AuthenticatedRecord = { sessionId: string; user: SessionUser; expire
 export type IntegrationRecord = { id: string; organizationId: string; provider: string; providerType: ProviderType; displayName: string; externalAccountId: string; providerInboxId: string | null; channelType: ChannelType; status: string; baseUrl: string | null; credentialRef: string | null; credentialCiphertext: string | null; credentialIv: string | null; credentialTag: string | null; credentialVersion: number | null; webhookSecretCiphertext: string | null; webhookSecretIv: string | null; webhookSecretTag: string | null; webhookSecretVersion: number | null; webhookRegistrationId: string | null; lastCheckAt: Date | null; lastErrorCode: string | null; lastErrorAt: Date | null; lastSyncStartedAt: Date | null; lastSyncCompletedAt: Date | null; lastSyncAt: Date | null; lastSyncStatus: string | null; lastSyncError: string | null };
 
 const toUser = (row: { id: string; name: string; email: string; avatar: string }, organizationId: string, membershipRole: string): User => ({ id: row.id, organizationId, name: row.name, email: row.email, role: role(membershipRole), avatar: row.avatar });
-const toContact = (row: typeof contacts.$inferSelect, tagNames: string[], opportunityCount: number): Contact => ({ id: row.id, organizationId: row.organizationId, name: row.name, company: row.company, phone: row.phone, email: row.email, tags: tagNames, ownerId: row.ownerId, lastConversationAt: iso(row.lastConversationAt), opportunities: opportunityCount, notes: row.notes });
+const toContact = (row: typeof contacts.$inferSelect, tagNames: string[], opportunityCount: number, identities: Contact["identities"] = []): Contact => ({ id: row.id, organizationId: row.organizationId, name: row.name, company: row.company, phone: row.phone, email: row.email, tags: tagNames, ownerId: row.ownerId, lastConversationAt: iso(row.lastConversationAt), opportunities: opportunityCount, notes: row.notes, identities });
 const toMessage = (row: typeof messages.$inferSelect): Message => ({ id: row.id, organizationId: row.organizationId, externalId: row.externalId ?? undefined, externalMessageId: row.externalId ?? undefined, conversationId: row.conversationId, channelType: (row.channelType as ChannelType | null) ?? undefined, providerType: (row.providerType as ProviderType | null) ?? undefined, direction: row.direction as Message["direction"], senderIdentity: row.senderIdentity ?? undefined, recipientIdentity: row.recipientIdentity ?? undefined, sender: row.sender as Message["sender"], authorName: row.authorName, body: row.body, messageType: row.messageType as MessageType, deliveryStatus: row.deliveryStatus as DeliveryStatus, providerCreatedAt: row.providerCreatedAt ? iso(row.providerCreatedAt) : undefined, createdAt: iso(row.createdAt), internal: row.internal });
 const toStage = (row: typeof pipelineStages.$inferSelect): PipelineStage => ({ id: row.id, organizationId: row.organizationId, name: row.name, key: stageKey(row.key), order: row.position, color: row.color });
 const toIntegration = (row: typeof integrationAccounts.$inferSelect): IntegrationRecord => ({ id: row.id, organizationId: row.organizationId, provider: row.provider, providerType: row.providerType as ProviderType, displayName: row.displayName, externalAccountId: row.externalAccountId, providerInboxId: row.providerInboxId, channelType: row.channelType as ChannelType, status: row.status, baseUrl: row.baseUrl, credentialRef: row.credentialRef, credentialCiphertext: row.credentialCiphertext, credentialIv: row.credentialIv, credentialTag: row.credentialTag, credentialVersion: row.credentialVersion, webhookSecretCiphertext: row.webhookSecretCiphertext, webhookSecretIv: row.webhookSecretIv, webhookSecretTag: row.webhookSecretTag, webhookSecretVersion: row.webhookSecretVersion, webhookRegistrationId: row.webhookRegistrationId, lastCheckAt: row.lastCheckAt, lastErrorCode: row.lastErrorCode, lastErrorAt: row.lastErrorAt, lastSyncStartedAt: row.lastSyncStartedAt, lastSyncCompletedAt: row.lastSyncCompletedAt, lastSyncAt: row.lastSyncAt, lastSyncStatus: row.lastSyncStatus, lastSyncError: row.lastSyncError });
@@ -90,13 +90,15 @@ export class Repositories {
   }
 
   async listContacts(organizationId: string): Promise<Contact[]> {
-    const [rows, opportunitiesRows, tagsByContact] = await Promise.all([
+    const [rows, opportunitiesRows, tagsByContact, identityRows] = await Promise.all([
       this.db.select().from(contacts).where(eq(contacts.organizationId, organizationId)),
       this.db.select({ contactId: opportunities.contactId }).from(opportunities).where(eq(opportunities.organizationId, organizationId)),
       this.tagMap(organizationId),
+      this.db.select().from(contactIdentities).where(eq(contactIdentities.organizationId, organizationId)),
     ]);
     const counts = new Map<string, number>(); for (const item of opportunitiesRows) counts.set(item.contactId, (counts.get(item.contactId) ?? 0) + 1);
-    return rows.map((row) => toContact(row, tagsByContact.get(row.id) ?? [], counts.get(row.id) ?? 0));
+    const identities = new Map<string, Contact["identities"]>(); for (const row of identityRows) identities.set(row.contactId, [...(identities.get(row.contactId) ?? []), { channelType: row.channelType as ChannelType, phone: row.phone ?? undefined, email: row.email ?? undefined, username: row.username ?? undefined }]);
+    return rows.map((row) => toContact(row, tagsByContact.get(row.id) ?? [], counts.get(row.id) ?? 0, identities.get(row.id) ?? []));
   }
 
   async searchContacts(organizationId: string, query: string, page = 1, pageSize = 25) {
@@ -118,14 +120,19 @@ export class Repositories {
     return this.withMessages(organizationId, rows);
   }
 
-  async searchConversations(organizationId: string, input: { query?: string; status?: string; assignedToId?: string; channelId?: string; page?: number; pageSize?: number }) {
-    const page = input.page ?? 1; const pageSize = input.pageSize ?? 25; const filters = [eq(conversations.organizationId, organizationId)];
+  async searchConversations(organizationId: string, input: { query?: string; status?: string; assignedToId?: string; channelId?: string; unreadOnly?: boolean; page?: number; pageSize?: number }) {
+    const page = Math.max(1, input.page ?? 1); const pageSize = Math.min(250, Math.max(1, input.pageSize ?? 25)); const filters = [eq(conversations.organizationId, organizationId)];
     if (input.status && ["OPEN", "WAITING", "RESOLVED"].includes(input.status)) filters.push(eq(conversations.status, input.status));
-    if (input.assignedToId === "mine") filters.push(isNull(conversations.assignedToId));
-    if (input.assignedToId && input.assignedToId !== "mine" && input.assignedToId !== "unassigned") filters.push(eq(conversations.assignedToId, input.assignedToId));
     if (input.assignedToId === "unassigned") filters.push(isNull(conversations.assignedToId));
+    else if (input.assignedToId) filters.push(eq(conversations.assignedToId, input.assignedToId));
     if (input.channelId) filters.push(eq(conversations.channelId, input.channelId));
-    const normalized = input.query?.trim(); if (normalized) filters.push(or(ilike(conversations.lastMessage, `%${normalized}%`), ilike(conversations.externalId, `%${normalized}%`))!);
+    if (input.unreadOnly) filters.push(gt(conversations.unread, 0));
+    const normalized = input.query?.trim().slice(0, 200);
+    if (normalized) {
+      const contactMatches = this.db.select({ conversationId: conversations.id }).from(conversations).innerJoin(contacts, and(eq(contacts.id, conversations.contactId), eq(contacts.organizationId, organizationId))).where(and(eq(conversations.organizationId, organizationId), or(ilike(contacts.name, `%${normalized}%`), ilike(contacts.phone, `%${normalized}%`), ilike(contacts.email, `%${normalized}%`), ilike(contacts.company, `%${normalized}%`))));
+      const messageMatches = this.db.select({ conversationId: messages.conversationId }).from(messages).where(and(eq(messages.organizationId, organizationId), ilike(messages.body, `%${normalized}%`)));
+      filters.push(or(ilike(conversations.lastMessage, `%${normalized}%`), inArray(conversations.id, contactMatches), inArray(conversations.id, messageMatches))!);
+    }
     const where = and(...filters); const [rows, total] = await Promise.all([this.db.select().from(conversations).where(where).orderBy(desc(conversations.lastMessageAt)).limit(pageSize).offset((page - 1) * pageSize), this.db.select({ count: count() }).from(conversations).where(where)]);
     return { items: await this.withMessages(organizationId, rows), total: Number(total[0]?.count ?? 0), page, pageSize };
   }
@@ -303,6 +310,14 @@ export class Repositories {
 
   async completeWebhookEvent(integrationAccountId: string, externalEventId: string): Promise<void> { await this.db.update(webhookEvents).set({ processedAt: new Date() }).where(and(eq(webhookEvents.integrationAccountId, integrationAccountId), eq(webhookEvents.externalEventId, externalEventId))); }
   async releaseWebhookEvent(organizationId: string, integrationAccountId: string, externalEventId: string): Promise<void> { await this.db.delete(webhookEvents).where(and(eq(webhookEvents.organizationId, organizationId), eq(webhookEvents.integrationAccountId, integrationAccountId), eq(webhookEvents.externalEventId, externalEventId), isNull(webhookEvents.processedAt))); }
+  async getWebhookActivity(organizationId: string, integrationAccountId: string) {
+    const scope = and(eq(webhookEvents.organizationId, organizationId), eq(webhookEvents.integrationAccountId, integrationAccountId));
+    const [received, processed] = await Promise.all([
+      this.db.select({ receivedAt: webhookEvents.receivedAt }).from(webhookEvents).where(scope).orderBy(desc(webhookEvents.receivedAt)).limit(1),
+      this.db.select({ processedAt: webhookEvents.processedAt }).from(webhookEvents).where(and(scope, sql`${webhookEvents.processedAt} IS NOT NULL`)).orderBy(desc(webhookEvents.processedAt)).limit(1),
+    ]);
+    return { lastReceivedAt: received[0]?.receivedAt ? iso(received[0].receivedAt) : null, lastProcessedAt: processed[0]?.processedAt ? iso(processed[0].processedAt) : null };
+  }
 
   async findConversationByExternalId(organizationId: string, externalId: string, channelConnectionId?: string) { return (await this.db.select().from(conversations).where(and(eq(conversations.organizationId, organizationId), ...(channelConnectionId ? [eq(conversations.channelConnectionId, channelConnectionId)] : []), eq(conversations.externalId, externalId))).limit(1))[0] ?? null; }
   async findMessageByExternalId(organizationId: string, externalId: string, channelConnectionId?: string) { return (await this.db.select().from(messages).where(and(eq(messages.organizationId, organizationId), ...(channelConnectionId ? [eq(messages.channelConnectionId, channelConnectionId)] : []), eq(messages.externalId, externalId))).limit(1))[0] ?? null; }
