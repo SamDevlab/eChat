@@ -3,6 +3,8 @@ import { isValidIntegrationEncryptionKey } from "./crypto.js";
 export type RuntimeConfig = {
   nodeEnv: string;
   databaseUrl?: string;
+  databaseName?: string;
+  databaseEnvironment: string;
   appUrl: string;
   publicAppUrl?: string;
   sessionSecret: string;
@@ -27,6 +29,15 @@ export const loadRuntimeConfig = (env: NodeJS.ProcessEnv = process.env): Runtime
   const nodeEnv = env.NODE_ENV ?? "development";
   const production = nodeEnv === "production";
   const databaseUrl = env.DATABASE_URL?.trim() || undefined;
+  let databaseName: string | undefined;
+  if (databaseUrl) {
+    try { databaseName = decodeURIComponent(new URL(databaseUrl).pathname.replace(/^\/+/, "")); }
+    catch { throw new Error("DATABASE_URL deve ser uma URL PostgreSQL válida"); }
+  }
+  const databaseEnvironment = env.DATABASE_ENV?.trim().toUpperCase() || (databaseName === "echat_test" ? "TEST" : production ? "PRODUCTION" : "UNCLASSIFIED");
+  if (!["TEST", "DEVELOPMENT", "PRODUCTION", "UNCLASSIFIED"].includes(databaseEnvironment)) throw new Error("DATABASE_ENV deve ser TEST, DEVELOPMENT ou PRODUCTION");
+  if (databaseEnvironment === "TEST" && databaseName !== "echat_test") throw new Error("DATABASE_ENV=TEST exige um banco chamado echat_test");
+  if (production && databaseEnvironment !== "PRODUCTION") throw new Error("NODE_ENV=production exige DATABASE_ENV=PRODUCTION");
   const appUrl = originFromEnv(env.APP_URL ?? (production ? undefined : "http://localhost:5173"), "APP_URL", production);
   const sessionSecret = env.SESSION_SECRET ?? "development-only-change-me";
   const publicAppUrl = env.PUBLIC_APP_URL?.trim() ? originFromEnv(env.PUBLIC_APP_URL, "PUBLIC_APP_URL", production) : undefined;
@@ -41,5 +52,5 @@ export const loadRuntimeConfig = (env: NodeJS.ProcessEnv = process.env): Runtime
     }
   }
 
-  return { nodeEnv, databaseUrl, appUrl, publicAppUrl, sessionSecret };
+  return { nodeEnv, databaseUrl, databaseName, databaseEnvironment, appUrl, publicAppUrl, sessionSecret };
 };

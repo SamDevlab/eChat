@@ -25,16 +25,59 @@ export class DomainServices {
   }
 
   private publicInvite(invite: any) { return { id: invite.id, organizationId: invite.organizationId, email: invite.email, role: invite.role, expiresAt: invite.expiresAt, acceptedAt: invite.acceptedAt, revokedAt: invite.revokedAt, createdAt: invite.createdAt }; }
-  private publicIntegration(integration: any) { return { id: integration.id, organizationId: integration.organizationId, provider: integration.provider, providerType: integration.providerType, displayName: integration.displayName, externalAccountId: integration.externalAccountId, providerInboxId: integration.providerInboxId, channelType: integration.channelType, status: integration.status, baseUrl: integration.baseUrl, webhookRegistrationId: integration.webhookRegistrationId, lastCheckAt: iso(integration.lastCheckAt), lastErrorCode: integration.lastErrorCode, lastErrorAt: iso(integration.lastErrorAt), lastSyncStartedAt: iso(integration.lastSyncStartedAt), lastSyncCompletedAt: iso(integration.lastSyncCompletedAt), lastSyncAt: iso(integration.lastSyncAt), lastSyncStatus: integration.lastSyncStatus, lastSyncError: integration.lastSyncError }; }
+  private publicIntegration(integration: any) { return { id: integration.id, organizationId: integration.organizationId, provider: integration.provider, providerType: integration.providerType, displayName: integration.displayName, externalAccountId: integration.externalAccountId, providerInboxId: integration.providerInboxId, channelType: integration.channelType, status: integration.status, baseUrl: integration.baseUrl, tokenConfigured: Boolean(integration.credentialCiphertext && integration.credentialIv && integration.credentialTag && integration.credentialVersion), webhookRegistrationId: integration.webhookRegistrationId, lastCheckAt: iso(integration.lastCheckAt), lastErrorCode: integration.lastErrorCode, lastErrorAt: iso(integration.lastErrorAt), lastSyncStartedAt: iso(integration.lastSyncStartedAt), lastSyncCompletedAt: iso(integration.lastSyncCompletedAt), lastSyncAt: iso(integration.lastSyncAt), lastSyncStatus: integration.lastSyncStatus, lastSyncError: integration.lastSyncError }; }
 
   listContacts(user: SessionUser) { return this.repositories.listContacts(user.organizationId); }
   searchContacts(user: SessionUser, query: string, page = 1, pageSize = 25) { return this.repositories.searchContacts(user.organizationId, query, page, pageSize); }
   listConversations(user: SessionUser) { return this.repositories.listConversations(user.organizationId); }
-  searchConversations(user: SessionUser, input: { query?: string; status?: string; assignedToId?: string; channelId?: string; page?: number; pageSize?: number }) { return this.repositories.searchConversations(user.organizationId, { ...input, assignedToId: input.assignedToId === "mine" ? user.id : input.assignedToId }); }
+  searchConversations(user: SessionUser, input: { query?: string; status?: string; assignedToId?: string; channelId?: string; unreadOnly?: boolean; page?: number; pageSize?: number }) { return this.repositories.searchConversations(user.organizationId, { ...input, assignedToId: input.assignedToId === "mine" ? user.id : input.assignedToId }); }
   getConversation(user: SessionUser, id: string) { return this.repositories.getConversation(user.organizationId, id).then((value) => { if (!value) throw new DomainError(404, "Conversa não encontrada"); return value; }); }
   listMembers(user: SessionUser) { return this.repositories.listMembers(user.organizationId); }
   listInvites(user: SessionUser) { return this.repositories.listInvites(user.organizationId).then((items) => items.map(this.publicInvite)); }
   listIntegrations(user: SessionUser) { return this.repositories.listIntegrations(user.organizationId).then((items) => items.map(this.publicIntegration)); }
+
+  async pilotDiagnostics(user: SessionUser, environment: { databaseConnected: boolean; migrationsReady: boolean; databaseEnvironment: string; publicAppUrl?: string; persistentUrlDeclared: boolean }) {
+    if (!canManage(user.role)) throw new DomainError(403, "Sem permissão para ver o diagnóstico do piloto");
+    const mode = outboundMode(); const integrations = await this.repositories.listIntegrations(user.organizationId); const integration = integrations.find((item) => item.provider === "chatwoot") ?? null;
+    let providerReachable = false; let accountMatch = false; let inboxMatch = false; let webhookMatch = false; let providerError: string | null = null;
+    if (integration) {
+      try {
+        const provider = await this.providerForIntegration(user.organizationId, integration.id) as IntegrationMessagingProvider;
+        if (!provider.listInboxes || !provider.listWebhooks) throw new ProviderError("CONFIGURATION_ERROR", "Leituras de Inbox e webhook indisponíveis");
+        const [account, inboxes, webhooks] = await Promise.all([provider.testConnection(), provider.listInboxes(), provider.listWebhooks()]);
+        providerReachable = true; accountMatch = String(account.accountId) === integration.externalAccountId;
+        inboxMatch = Boolean(integration.providerInboxId && inboxes.some((item) => String(item.id) === integration.providerInboxId));
+        const expectedWebhookUrl = environment.publicAppUrl ? `${environment.publicAppUrl.replace(/\/$/, "")}/api/v1/webhooks/chatwoot` : "";
+        webhookMatch = Boolean(expectedWebhookUrl && webhooks.some((item) => { try { return new URL(item.url).toString().replace(/\/$/, "") === expectedWebhookUrl && item.subscriptions.includes("message_created"); } catch { return false; } }));
+        if (!accountMatch) providerError = "ACCOUNT_MISMATCH";
+        else if (!inboxMatch) providerError = "INBOX_MISMATCH";
+      } catch (error) {
+        const rawStatus = Number((error as { status?: number }).status ?? 0); const rawCode = error instanceof ProviderError ? error.code : undefined;
+        providerError = sanitizedProviderError(rawStatus, "", rawCode);
+      }
+    }
+    const publicOrigin = environment.publicAppUrl ?? null; const publicUrlHttps = Boolean(publicOrigin && new URL(publicOrigin).protocol === "https:"); let publicUrlReachable = false;
+    if (publicOrigin && publicUrlHttps) { try { const response = await fetch(`${publicOrigin}/api/health`, { signal: AbortSignal.timeout(3_000) }); publicUrlReachable = response.ok; } catch { publicUrlReachable = false; } }
+    const webhookActivity = integration ? await this.repositories.getWebhookActivity(user.organizationId, integration.id) : { lastReceivedAt: null, lastProcessedAt: null };
+    const syncOk = integration?.lastSyncStatus === "SUCCESS"; const chatwootOk = Boolean(integration && providerReachable && accountMatch); const outboundSafe = mode === "disabled"; const publicUrlOk = publicUrlHttps && publicUrlReachable && environment.persistentUrlDeclared;
+    const checks = [
+      { key: "database", label: "Banco eChat", status: environment.databaseConnected ? "PASS" : "BLOCKED", detail: environment.databaseConnected ? "PostgreSQL acessível" : "PostgreSQL indisponível" },
+      { key: "migrations", label: "Schema e migrations", status: environment.migrationsReady ? "PASS" : "BLOCKED", detail: environment.migrationsReady ? "Tabelas principais disponíveis" : "Schema incompleto" },
+      { key: "chatwoot", label: "Chatwoot", status: chatwootOk ? "PASS" : "BLOCKED", detail: chatwootOk ? "Conta acessível" : providerError ?? "Conexão não configurada" },
+      { key: "inbox", label: "Inbox", status: inboxMatch ? "PASS" : "BLOCKED", detail: inboxMatch ? "Inbox encontrada" : "Inbox ausente ou divergente" },
+      { key: "webhook", label: "Webhook", status: webhookMatch ? "PASS" : "BLOCKED", detail: webhookMatch ? "URL e evento conferem" : "Webhook ausente ou divergente" },
+      { key: "sync", label: "Sincronização", status: syncOk ? "PASS" : "ATTENTION", detail: syncOk ? "Última sincronização concluída" : integration?.lastSyncStatus === "FAILED" ? "Última sincronização falhou" : "Sincronização ainda não concluída" },
+      { key: "outboundPolicy", label: "Política de envio", status: outboundSafe ? "PASS" : mode === "pilot" ? "ATTENTION" : "BLOCKED", detail: `OUTBOUND_MODE=${mode}` },
+      { key: "publicUrl", label: "URL pública HTTPS", status: publicUrlOk ? "PASS" : publicUrlHttps && publicUrlReachable ? "ATTENTION" : "BLOCKED", detail: !publicOrigin ? "PUBLIC_APP_URL não configurada" : !publicUrlHttps ? "HTTPS obrigatório" : !publicUrlReachable ? "Endpoint público não respondeu" : environment.persistentUrlDeclared ? "URL pública persistente declarada" : "HTTPS responde; persistência não confirmada" },
+    ];
+    const readinessStatus = checks.some((check) => check.status === "BLOCKED") ? "BLOCKED" : checks.some((check) => check.status === "ATTENTION") ? "ATTENTION" : "READY";
+    const integrationStatus = !integration ? "NOT_CONFIGURED" : !providerReachable || providerError === "ACCOUNT_MISMATCH" ? "ERROR" : providerError === "INBOX_MISMATCH" ? "ATTENTION" : !webhookMatch ? "WEBHOOK_PENDING" : readinessStatus === "READY" ? "READY" : "ATTENTION";
+    return {
+      generatedAt: new Date().toISOString(), readiness: { status: readinessStatus, checks }, databaseEnvironment: environment.databaseEnvironment, outboundMode: mode,
+      publicUrl: { configured: Boolean(publicOrigin), https: publicUrlHttps, reachable: publicUrlReachable, persistentDeclared: environment.persistentUrlDeclared, origin: publicOrigin, expectedWebhookUrl: publicOrigin ? `${publicOrigin}/api/v1/webhooks/chatwoot` : null },
+      integration: integration ? { status: integrationStatus, channelType: integration.channelType, accountAccessible: accountMatch, inboxAccessible: inboxMatch, webhookStatus: webhookMatch ? "MATCH" : "MISSING_OR_DIVERGENT", lastConnectionCheckAt: iso(integration.lastCheckAt), lastErrorAt: iso(integration.lastErrorAt), lastErrorCode: providerError ?? integration.lastErrorCode, lastSyncStatus: integration.lastSyncStatus, lastSyncAt: iso(integration.lastSyncAt), lastWebhookReceivedAt: webhookActivity.lastReceivedAt, lastWebhookProcessedAt: webhookActivity.lastProcessedAt } : { status: integrationStatus, channelType: null, accountAccessible: false, inboxAccessible: false, webhookStatus: "NOT_CONFIGURED", lastConnectionCheckAt: null, lastErrorAt: null, lastErrorCode: null, lastSyncStatus: null, lastSyncAt: null, lastWebhookReceivedAt: null, lastWebhookProcessedAt: null },
+    };
+  }
 
   async signup(input: { name: string; email: string; password: string; organizationName: string; session: { id: string; tokenHash: string; expiresAt: Date } }) {
     if (input.password.length < 8) throw new DomainError(422, "A senha deve ter pelo menos 8 caracteres");
@@ -145,8 +188,19 @@ export class DomainServices {
 
   async saveIntegration(user: SessionUser, input: { id?: string; provider: string; displayName: string; baseUrl: string; externalAccountId: string; providerInboxId?: string; channelType?: ChannelType; apiToken: string; webhookSecret?: string }) {
     if (!canManage(user.role)) throw new DomainError(403, "Sem permissão para configurar integrações"); if (input.provider !== "chatwoot" && input.provider !== "mock") throw new DomainError(422, "Provider não suportado"); if (input.provider === "chatwoot" && !input.providerInboxId?.trim()) throw new DomainError(422, "Inbox Chatwoot obrigatória"); let baseUrl: string; try { baseUrl = validateBaseUrl(input.baseUrl); } catch (error) { throw new DomainError(422, error instanceof Error ? error.message : "Base URL inválida"); }
-    const channelType = input.channelType ?? "UNKNOWN"; const providerType: ProviderType = input.provider === "chatwoot" ? "CHATWOOT" : "MOCK"; const encrypted = input.provider === "chatwoot" ? encryptSecret(input.apiToken) : { ciphertext: "", iv: "", tag: "", version: 1 }; const webhook = input.webhookSecret ? encryptSecret(input.webhookSecret) : undefined; const integration = await this.repositories.saveIntegration({ id: input.id ?? `integration-${randomBytes(12).toString("hex")}`, organizationId: user.organizationId, provider: input.provider, providerType, channelType, providerInboxId: input.providerInboxId, displayName: input.displayName.trim() || "Chatwoot", externalAccountId: input.externalAccountId.trim(), baseUrl, credentialCiphertext: encrypted.ciphertext, credentialIv: encrypted.iv, credentialTag: encrypted.tag, credentialVersion: encrypted.version, webhookSecretCiphertext: webhook?.ciphertext, webhookSecretIv: webhook?.iv, webhookSecretTag: webhook?.tag, webhookSecretVersion: webhook?.version });
-    if (!(await this.repositories.listChannels(user.organizationId)).some((channel) => channel.integrationAccountId === integration.id)) await this.repositories.upsertSyncedChannel({ organizationId: user.organizationId, integrationAccountId: integration.id, externalId: `integration-${integration.id}`, name: integration.displayName, type: channelType, providerType }); return this.publicIntegration(integration);
+    const channelType = input.channelType ?? "UNKNOWN";
+    const providerType: ProviderType = input.provider === "chatwoot" ? "CHATWOOT" : "MOCK";
+    const existing = input.id ? await this.repositories.getIntegration(user.organizationId, input.id) : null;
+    if (input.id && !existing) throw new DomainError(404, "Integração não encontrada");
+    let encrypted: { ciphertext: string; iv: string; tag: string; version: number };
+    if (input.provider === "chatwoot") {
+      if (input.apiToken.trim()) encrypted = encryptSecret(input.apiToken.trim());
+      else if (existing?.credentialCiphertext && existing.credentialIv && existing.credentialTag && existing.credentialVersion) encrypted = { ciphertext: existing.credentialCiphertext, iv: existing.credentialIv, tag: existing.credentialTag, version: existing.credentialVersion };
+      else throw new DomainError(422, "Token da API obrigatório para uma nova conexão");
+    } else encrypted = { ciphertext: "", iv: "", tag: "", version: 1 };
+    const webhook = input.webhookSecret ? encryptSecret(input.webhookSecret) : undefined;
+    const keepExistingWebhook = input.provider === "chatwoot" && !webhook;
+    const integration = await this.repositories.saveIntegration({ id: input.id ?? `integration-${randomBytes(12).toString("hex")}`, organizationId: user.organizationId, provider: input.provider, providerType, channelType, providerInboxId: input.providerInboxId, displayName: input.displayName.trim() || "Chatwoot", externalAccountId: input.externalAccountId.trim(), baseUrl, credentialCiphertext: encrypted.ciphertext, credentialIv: encrypted.iv, credentialTag: encrypted.tag, credentialVersion: encrypted.version, webhookSecretCiphertext: webhook?.ciphertext ?? (keepExistingWebhook ? existing?.webhookSecretCiphertext : null), webhookSecretIv: webhook?.iv ?? (keepExistingWebhook ? existing?.webhookSecretIv : null), webhookSecretTag: webhook?.tag ?? (keepExistingWebhook ? existing?.webhookSecretTag : null), webhookSecretVersion: webhook?.version ?? (keepExistingWebhook ? existing?.webhookSecretVersion : null) });    if (!(await this.repositories.listChannels(user.organizationId)).some((channel) => channel.integrationAccountId === integration.id)) await this.repositories.upsertSyncedChannel({ organizationId: user.organizationId, integrationAccountId: integration.id, externalId: `integration-${integration.id}`, name: integration.displayName, type: channelType, providerType }); return this.publicIntegration(integration);
   }
 
   async testIntegration(user: SessionUser, id: string) {

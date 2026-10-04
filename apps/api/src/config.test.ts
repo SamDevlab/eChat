@@ -29,4 +29,9 @@ describe("production runtime configuration", () => {
     expect(isValidIntegrationEncryptionKey("0".repeat(64))).toBe(true);
     expect(isValidIntegrationEncryptionKey(Buffer.alloc(32, 7).toString("base64"))).toBe(true);
   });
+
+  it("labels the pilot database and refuses a test label for another database", () => {
+    expect(loadRuntimeConfig({ DATABASE_URL: "postgres://user:pass@127.0.0.1:5432/echat_test" })).toMatchObject({ databaseName: "echat_test", databaseEnvironment: "TEST" });
+    expect(() => loadRuntimeConfig({ DATABASE_URL: "postgres://user:pass@127.0.0.1:5432/echat_dev", DATABASE_ENV: "TEST" })).toThrow("echat_test");
+  });
 });

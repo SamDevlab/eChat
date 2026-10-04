@@ -1,8 +1,9 @@
 import { createDatabase, channels, contacts, contactTags, conversations, integrationAccounts, messages, opportunities, opportunityActivities, organizationMembers, organizations, pipelineStages, pipelines, tags, users } from "@echat/db";
 import { createSeedState } from "./seed-data.js";
 import { hashPassword } from "./auth.js";
+import { assertDemoSeedAllowed } from "./seed-safety.js";
 
-if (process.env.NODE_ENV === "production") throw new Error("Seed demo bloqueado quando NODE_ENV=production");
+assertDemoSeedAllowed();
 const { db, client } = createDatabase();
 const state = createSeedState();
 const passwordHash = hashPassword("local-only");
