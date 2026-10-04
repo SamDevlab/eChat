@@ -120,3 +120,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .readiness-meta dd small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; }
 @media (max-width: 980px) { .readiness-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 680px) { .readiness-card { margin: 12px 15px; padding: 14px; } .readiness-card > .panel-heading { flex-wrap: wrap; } .readiness-actions { justify-content: flex-start; } .readiness-grid, .readiness-meta { grid-template-columns: 1fr; } }
+
+.assignee-select { max-width: 140px; min-width: 0; padding: 7px 23px 7px 9px; border: 1px solid var(--border); border-radius: 8px; color: var(--foreground); background: #fff; font-size: 10px; }
+@media (max-width: 680px) { .assignee-select { max-width: 106px; padding: 6px 18px 6px 7px; font-size: 9px; } }
+
+.channel-setup-steps { display: grid; gap: 4px; margin: 7px 0 0 16px; color: #66788b; font-size: 10px; line-height: 1.45; }

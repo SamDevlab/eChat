@@ -207,6 +207,7 @@ export class DomainServices {
     if (!canManage(user.role)) throw new DomainError(403, "Sem permissão para testar integrações");
     const integration = await this.repositories.getIntegration(user.organizationId, id);
     if (!integration) throw new DomainError(404, "Integração não encontrada");
+    if (integration.provider !== "chatwoot") throw new DomainError(422, "Teste de conexão disponível somente para Chatwoot");
     try {
       const provider = await this.providerForIntegration(user.organizationId, id) as IntegrationMessagingProvider;
       if (!provider.listInboxes || !provider.listContacts || !provider.listConversations || !provider.listWebhooks) throw new ProviderError("CONFIGURATION_ERROR", "Chatwoot não oferece as leituras necessárias");
