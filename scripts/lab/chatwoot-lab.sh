@@ -66,6 +66,7 @@ start_redis() {
   if online_redis; then return; fi
   if port_in_use 6380; then echo 'Port 6380 is occupied by an unverified process; refusing to start Redis.' >&2; return 1; fi
   [[ -d "$REDIS_DIR" ]] || { echo 'Dedicated Chatwoot Redis data directory is missing.' >&2; return 1; }
+  install -d -o redis -g redis -m 755 /run/redis
   runuser -u redis -- redis-server \
     --port 6380 --bind 127.0.0.1 --protected-mode yes \
     --dir "$REDIS_DIR" --appendonly no --dbfilename dump.rdb \
