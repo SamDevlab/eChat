@@ -4,6 +4,7 @@ set -euo pipefail
 STATE_DIR=/var/lib/echat-chatwoot-lab
 CHATWOOT_DIR=/home/chatwoot/chatwoot
 CHATWOOT_ENV=/home/chatwoot/chatwoot/.env
+BUNDLE_BIN=/home/chatwoot/.rbenv/shims/bundle
 REDIS_DIR=/var/lib/redis/echat-chatwoot-lab
 REDIS_PIDFILE=/run/redis/echat-chatwoot-lab.pid
 REDIS_LOG=/var/log/redis/echat-chatwoot-lab.log
@@ -20,6 +21,21 @@ online_pg() { pg_isready -h 127.0.0.1 -p "$PG_PORT" -q; }
 online_redis() { [[ "$(redis-cli -h 127.0.0.1 -p 6380 ping 2>/dev/null || true)" == PONG ]]; }
 online_web() { curl --silent --fail --max-time 3 http://127.0.0.1:3000/api  >/dev/null 2>&1 || curl --silent --output /dev/null --max-time 3 http://127.0.0.1:3000/login 2>/dev/null; }
 online_worker() { pgrep -u chatwoot -f '[s]idekiq' >/dev/null 2>&1; }
+
+port_in_use() {
+  local port="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn "( sport = :$port )" | grep -q LISTEN
+    return
+  fi
+  if command -v netstat >/dev/null 2>&1; then
+    netstat -ltn 2>/dev/null | awk -v port=":$port" '$4 ~ port"$" { found=1 } END { exit !found }'
+    return
+  fi
+  local hex_port
+  printf -v hex_port '%04X' "$port"
+  awk -v port=":$hex_port" '$2 ~ port"$" && $4 == "0A" { found=1 } END { exit !found }' /proc/net/tcp /proc/net/tcp6
+}
 
 proc_start_ticks() { awk '{print $22}' "/proc/$1/stat" 2>/dev/null; }
 proc_cmdline() { tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null; }
@@ -48,8 +64,9 @@ start_pg() {
 
 start_redis() {
   if online_redis; then return; fi
-  if ss -ltn '( sport = :6380 )' | grep -q LISTEN; then echo 'Port 6380 is occupied by an unverified process; refusing to start Redis.' >&2; return 1; fi
+  if port_in_use 6380; then echo 'Port 6380 is occupied by an unverified process; refusing to start Redis.' >&2; return 1; fi
   [[ -d "$REDIS_DIR" ]] || { echo 'Dedicated Chatwoot Redis data directory is missing.' >&2; return 1; }
+  install -d -o redis -g redis -m 755 /run/redis
   runuser -u redis -- redis-server \
     --port 6380 --bind 127.0.0.1 --protected-mode yes \
     --dir "$REDIS_DIR" --appendonly no --dbfilename dump.rdb \
@@ -75,7 +92,8 @@ start_chatwoot_process() {
   if [[ "$service" == web ]] && online_web; then return; fi
   if [[ "$service" == worker ]] && online_worker; then return; fi
   [[ -d "$CHATWOOT_DIR" && -f "$CHATWOOT_ENV" ]] || { echo 'Chatwoot checkout or local .env is missing; refusing default configuration.' >&2; return 1; }
-  [[ -x /home/chatwoot/.rbenv/shims/bundle || -x /usr/local/bin/bundle ]] || { echo 'Chatwoot Ruby bundle is unavailable.' >&2; return 1; }
+  if [[ ! -x "$BUNDLE_BIN" ]]; then BUNDLE_BIN=/usr/local/bin/bundle; fi
+  [[ -x "$BUNDLE_BIN" ]] || { echo 'Chatwoot Ruby bundle is unavailable.' >&2; return 1; }
   rm -f "$temp_pid"
   runuser -u chatwoot -- env LAB_COMMAND="$command" LAB_PID_PATH="$temp_pid" LAB_LOG_NAME="$log_name" bash -lc '
     cd /home/chatwoot/chatwoot
@@ -83,7 +101,7 @@ start_chatwoot_process() {
     . /home/chatwoot/chatwoot/.env
     set +a
     mkdir -p log
-    nohup bash -lc "exec $LAB_COMMAND" >> "log/$LAB_LOG_NAME" 2>&1 < /dev/null &
+    nohup bash -c "set -a; . /home/chatwoot/chatwoot/.env; set +a; exec $LAB_COMMAND" >> "log/$LAB_LOG_NAME" 2>&1 < /dev/null &
     echo "$!" > "$LAB_PID_PATH"
   '
   [[ -s "$temp_pid" ]] || { echo "Could not record the Chatwoot $service PID." >&2; return 1; }
@@ -103,8 +121,8 @@ start_chatwoot_process() {
 start() {
   start_pg
   start_redis
-  start_chatwoot_process web 'bundle exec rails server -b 127.0.0.1 -p 3000' chatwoot-lab-web.log
-  start_chatwoot_process worker 'bundle exec sidekiq -C config/sidekiq.yml -c 2' chatwoot-lab-worker.log
+  start_chatwoot_process web "$BUNDLE_BIN exec rails server -b 127.0.0.1 -p 3000" chatwoot-lab-web.log
+  start_chatwoot_process worker "$BUNDLE_BIN exec sidekiq -C config/sidekiq.yml -c 2" chatwoot-lab-worker.log
   status
 }
 

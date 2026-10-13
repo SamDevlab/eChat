@@ -8,6 +8,7 @@ import { createMessagingProvider } from "./providers.js";
 import { checkDatabaseReadiness } from "./readiness.js";
 import { DomainError, DomainServices } from "./services.js";
 import { Repositories } from "./repositories.js";
+import { selectChatwootWebhookCandidate } from "./webhook-routing.js";
 
 const runtimeConfig = loadRuntimeConfig(); const port = Number(process.env.PORT ?? 3001); const appUrl = runtimeConfig.appUrl; const cookieName = process.env.SESSION_COOKIE_NAME ?? "echat_session"; const sessionTtlHours = Number(process.env.SESSION_TTL_HOURS ?? 168); const sessionSecret = runtimeConfig.sessionSecret; const maxBodyBytes = 1_048_576; const { db, client } = createDatabase(runtimeConfig.databaseUrl); const repositories = new Repositories(db); const provider = createMessagingProvider(); const services = new DomainServices(repositories, provider); const loginAttempts = new Map<string, { count: number; resetAt: number }>(); const signupAttempts = new Map<string, { count: number; resetAt: number }>(); const inviteAttempts = new Map<string, { count: number; resetAt: number }>(); const connectionAttempts = new Map<string, { count: number; resetAt: number }>(); const messageUserAttempts = new Map<string, { count: number; resetAt: number }>(); const messageConversationAttempts = new Map<string, { count: number; resetAt: number }>();
 const json = (res: ServerResponse, status: number, payload: unknown, headers: Record<string, string> = {}) => { res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Origin": appUrl, "Access-Control-Allow-Credentials": "true", "Vary": "Origin", ...headers }); res.end(JSON.stringify(payload)); };
@@ -54,10 +55,11 @@ const route = async (req: IncomingMessage, res: ServerResponse) => {
           if (integrationProvider.name === "chatwoot" && integrationProvider.verifyWebhook?.(signatureHeaders, rawBody)) matches.push({ integration, provider: integrationProvider });
         } catch { /* Credentials for a candidate cannot authorize this delivery. */ }
       }
-      if (matches.length !== 1) throw new DomainError(401, "Assinatura Chatwoot inválida");
+      const selected = selectChatwootWebhookCandidate(matches, signatureHeaders, rawBody, rawPayload);
+      if (!selected) throw new DomainError(401, "Assinatura Chatwoot inválida");
       const eventId = firstHeader(req.headers["x-chatwoot-delivery"]);
       if (!eventId) throw new DomainError(400, "X-Chatwoot-Delivery obrigatório");
-      const { integration, provider: integrationProvider } = matches[0];
+      const { integration, provider: integrationProvider } = selected;
       json(res, 200, await services.processWebhook({ integrationAccountId: integration.id, organizationId: integration.organizationId, provider: integration.provider, eventId, rawBody, payload: rawPayload, providerInstance: integrationProvider }));
       return;
     }

@@ -110,4 +110,16 @@ describe("Chatwoot adapter", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ payload: [{ id: 88, status: "open", meta: { sender: { id: 10 }, channel: "Channel::Sms" } }] }), { status: 200 })));
     await expect(new ChatwootProvider({ baseUrl: "https://chatwoot.example", token: "secret", accountId: "77" }).listConversations(1)).rejects.toMatchObject({ code: "UNSUPPORTED_CHANNEL" });
   });
+
+  it("normalizes Instagram Direct media-only webhooks without dropping the event", () => {
+    const provider = new ChatwootProvider({ baseUrl: "https://chatwoot.example", token: "secret", accountId: "77", inboxId: "33", channelType: "INSTAGRAM" });
+    const [event] = provider.normalizeWebhook({ event: "message_created", id: "ig-event-1", account: { id: 77 }, conversation: { id: 88, inbox_id: 33, status: "open", channel: "Channel::Instagram", meta: { sender: { id: 10, name: "Instagram User", username: "ig_user" }, channel: "Channel::Instagram" }, inbox: { id: 33, name: "Instagram Direct", channel_type: "Channel::Instagram" } }, message: { id: 901, content: "", message_type: "incoming", created_at: 1_700_000_000, sender: { id: 10, name: "Instagram User", username: "ig_user" }, attachments: [{ id: 700, file_type: "image", data_url: "https://cdn.example/image.jpg", file_name: "photo.jpg", file_size: 1234 }] } });
+    expect(event).toEqual(expect.objectContaining({ externalAccountId: "77", externalChannelId: "33", channelType: "INSTAGRAM", externalContactId: "10", username: "ig_user", authorName: "Instagram User", body: "[Imagem recebida]", messageType: "IMAGE" }));
+    expect(event.attachments).toEqual([{ externalUrl: "https://cdn.example/image.jpg", mimeType: "image/*", filename: "photo.jpg", size: 1234, providerAssetId: "700" }]);
+  });
+
+  it("uses provider pagination metadata instead of treating every non-empty page as another page", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ payload: [{ id: 88, status: "open", inbox_id: 33, meta: { sender: { id: 10 }, channel: "Channel::Instagram" }, last_non_activity_message: { content: "Olá" } }], meta: { current_page: 1, total_pages: 1 } }), { status: 200 })));
+    await expect(new ChatwootProvider({ baseUrl: "https://chatwoot.example", token: "secret", accountId: "77", inboxId: "33", channelType: "INSTAGRAM" }).listConversations(1)).resolves.toMatchObject({ hasNextPage: false, items: [{ channelExternalId: "33", channelType: "INSTAGRAM" }] });
+  });
 });
