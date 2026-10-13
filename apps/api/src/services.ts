@@ -46,7 +46,8 @@ export class DomainServices {
         if (!provider.listInboxes || !provider.listWebhooks) throw new ProviderError("CONFIGURATION_ERROR", "Leituras de Inbox e webhook indisponíveis");
         const [account, inboxes, webhooks] = await Promise.all([provider.testConnection(), provider.listInboxes(), provider.listWebhooks()]);
         providerReachable = true; accountMatch = String(account.accountId) === integration.externalAccountId;
-        inboxMatch = Boolean(integration.providerInboxId && inboxes.some((item) => String(item.id) === integration.providerInboxId));
+        const selectedInbox = inboxes.find((item) => String(item.id) === integration.providerInboxId);
+        inboxMatch = Boolean(selectedInbox && (integration.channelType === "UNKNOWN" || selectedInbox.channelType === integration.channelType));
         const expectedWebhookUrl = environment.publicAppUrl ? `${environment.publicAppUrl.replace(/\/$/, "")}/api/v1/webhooks/chatwoot` : "";
         webhookMatch = Boolean(expectedWebhookUrl && webhooks.some((item) => { try { return new URL(item.url).toString().replace(/\/$/, "") === expectedWebhookUrl && item.subscriptions.includes("message_created"); } catch { return false; } }));
         if (!accountMatch) providerError = "ACCOUNT_MISMATCH";
@@ -220,7 +221,7 @@ export class DomainServices {
       ]);
       if (account.accountId !== integration.externalAccountId) throw new ProviderError("CONFIGURATION_ERROR", "ACCOUNT_MISMATCH");
       const selectedInbox = inboxes.find((inbox) => inbox.id === integration.providerInboxId);
-      const inboxMatch = Boolean(selectedInbox && (integration.channelType === "UNKNOWN" || !selectedInbox.channelType || selectedInbox.channelType === integration.channelType));
+      const inboxMatch = Boolean(selectedInbox && (integration.channelType === "UNKNOWN" || selectedInbox.channelType === integration.channelType));
       if (!inboxMatch) throw new ProviderError("CONFIGURATION_ERROR", "INBOX_MISMATCH");
       const publicUrl = process.env.PUBLIC_APP_URL?.trim().replace(/\/$/, "");
       const expectedWebhookUrl = publicUrl ? `${publicUrl}/api/v1/webhooks/chatwoot` : undefined;

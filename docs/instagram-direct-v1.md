@@ -12,6 +12,28 @@ The connection is configured under **Canais** by selecting `Instagram`, the Chat
 
 The eChat webhook is distinct from Meta's callback into Chatwoot. Chatwoot's documented Instagram Business Login setup uses `/webhooks/instagram` for the Meta webhook callback and `/instagram/callback` for the login redirect; it also documents the `messages`, `messaging_seen` and `message_reactions` subscriptions and requires a live Meta app mode for delivery. See the [Chatwoot Instagram Business Login guide](https://developers.chatwoot.com/self-hosted/configuration/features/integrations/instagram-via-instagram-business-login/).
 
+## Two distinct routes and safe placeholders
+
+Keep these routes separate during the pilot:
+
+```text
+Meta -> Chatwoot:
+  Meta callback: https://<CHATWOOT_HOST>/webhooks/instagram
+  Login redirect: https://<CHATWOOT_HOST>/instagram/callback
+  Meta app id: <META_APP_ID>
+  Meta app secret: <META_APP_SECRET>
+
+Chatwoot -> eChat:
+  eChat callback: https://<ECHAT_PUBLIC_HOST>/api/v1/webhooks/chatwoot
+  eChat public origin: https://<ECHAT_PUBLIC_HOST>
+  Chatwoot account id: <CHATWOOT_ACCOUNT_ID>
+  Instagram inbox id: <CHATWOOT_INSTAGRAM_INBOX_ID>
+  Chatwoot API token: <CHATWOOT_API_TOKEN>
+  Chatwoot webhook secret: <CHATWOOT_WEBHOOK_SECRET>
+```
+
+Do not paste real values into this document or into `.env.example`. Put them only in the authorized Chatwoot/Meta consoles and the ignored server environment. Before activation, resolve `<ECHAT_PUBLIC_HOST>`, validate its certificate and reachability from the Chatwoot host, then save the exact account and inbox IDs in **Canais** and run the read-only check. The eChat callback accepts only a signed Chatwoot delivery whose account and inbox match the selected integration.
+
 ## V1 behavior
 
 - Instagram messages are routed by organization, Chatwoot account, inbox ID and channel type.
