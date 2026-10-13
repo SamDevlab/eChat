@@ -15,6 +15,8 @@ Referências: [Configuração oficial WhatsApp Embedded Signup no Chatwoot](http
 
 ## Instagram
 
+O software do eChat para o caminho Instagram → Chatwoot → eChat está preparado no [guia de qualificação Instagram Direct V1](./instagram-direct-v1.md). Esta checklist continua sendo pré-requisito operacional: a conexão Meta/Chatwoot real, callback HTTPS e conta de teste ainda precisam ser configurados e qualificados.
+
 - [ ] Usar conta Instagram profissional de teste e uma conta Facebook com acesso aos ativos.
 - [ ] Preparar aplicativo Meta Business e configurar produto, URL de callback e eventos de webhook exigidos pelo método escolhido.
 - [ ] Adicionar testers/papéis e conceder apenas as permissões necessárias para o fluxo de mensagens.

@@ -122,6 +122,14 @@ export interface Attachment {
   providerAssetId?: string;
 }
 
+export interface ProviderAttachment {
+  externalUrl?: string;
+  mimeType: string;
+  filename?: string;
+  size?: number;
+  providerAssetId?: string;
+}
+
 export interface Conversation {
   id: string;
   organizationId: string;
@@ -253,12 +261,14 @@ export interface NormalizedWebhookEvent {
   externalConversationId: string;
   externalMessageId?: string;
   externalContactId?: string;
+  username?: string;
   externalChannelId?: string;
   channelName?: string;
   channelType?: ChannelType;
   providerType?: ProviderType;
   status?: Conversation["status"];
   messageType?: MessageType;
+  attachments?: ProviderAttachment[];
   direction?: MessageDirection;
   body: string;
   createdAt: string;
