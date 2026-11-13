@@ -1,10 +1,10 @@
 import { and, count, desc, eq, gt, ilike, inArray, isNull, or } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { Database } from "@echat/db";
-import { authSessions, channels, contactTags, contacts, conversations, integrationAccounts, messages, opportunities, opportunityActivities, organizationInvites, opportunityConversations, organizationMembers, organizations, pipelineStages, pipelines, tags, users, webhookEvents } from "@echat/db";
-import type { Contact, Conversation, Message, Opportunity, OpportunityStage, PipelineStage, Role, SessionUser, User } from "@echat/shared";
+import { authSessions, channels, contactTags, contacts, conversations, departmentMembers, departments, integrationAccounts, messages, opportunities, opportunityActivities, opportunityEmails, organizationInvites, opportunityConversations, organizationMembers, organizations, pipelineStages, pipelines, routingRules, tags, users, webhookEvents } from "@echat/db";
+import type { Contact, Conversation, Department, Message, Opportunity, OpportunityStage, PipelineStage, Role, RoutingRule, SessionUser, User } from "@echat/shared";
 
-const role = (value: string): Role => value === "OWNER" || value === "ADMIN" ? value : "AGENT";
+const role = (value: string): Role => ["OWNER", "ADMIN", "MANAGER", "SELLER", "SUPERVISOR", "FINANCE", "AGENT"].includes(value) ? value as Role : "AGENT";
 const stageKey = (value: string): OpportunityStage => value as OpportunityStage;
 const iso = (value: Date | string): string => value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 
@@ -15,6 +15,8 @@ const toUser = (row: { id: string; name: string; email: string; avatar: string }
 const toContact = (row: typeof contacts.$inferSelect, tagNames: string[], opportunityCount: number): Contact => ({ id: row.id, organizationId: row.organizationId, name: row.name, company: row.company, phone: row.phone, email: row.email, tags: tagNames, ownerId: row.ownerId, lastConversationAt: iso(row.lastConversationAt), opportunities: opportunityCount, notes: row.notes });
 const toMessage = (row: typeof messages.$inferSelect): Message => ({ id: row.id, organizationId: row.organizationId, externalId: row.externalId ?? undefined, conversationId: row.conversationId, sender: row.sender as Message["sender"], authorName: row.authorName, body: row.body, createdAt: iso(row.createdAt), internal: row.internal });
 const toStage = (row: typeof pipelineStages.$inferSelect): PipelineStage => ({ id: row.id, organizationId: row.organizationId, name: row.name, key: stageKey(row.key), order: row.position, color: row.color });
+const toDepartment = (row: typeof departments.$inferSelect, memberIds: string[]): Department => ({ id: row.id, organizationId: row.organizationId, name: row.name, slug: row.slug, color: row.color, description: row.description, active: row.active, memberIds });
+const toRoutingRule = (row: typeof routingRules.$inferSelect): RoutingRule => ({ id: row.id, organizationId: row.organizationId, departmentId: row.departmentId, channelId: row.channelId ?? undefined, name: row.name, keywords: row.keywords, position: row.position, active: row.active });
 const toIntegration = (row: typeof integrationAccounts.$inferSelect): IntegrationRecord => ({ id: row.id, organizationId: row.organizationId, provider: row.provider, displayName: row.displayName, externalAccountId: row.externalAccountId, status: row.status, baseUrl: row.baseUrl, credentialRef: row.credentialRef, credentialCiphertext: row.credentialCiphertext, credentialIv: row.credentialIv, credentialTag: row.credentialTag, credentialVersion: row.credentialVersion, webhookSecretCiphertext: row.webhookSecretCiphertext, webhookSecretIv: row.webhookSecretIv, webhookSecretTag: row.webhookSecretTag, webhookSecretVersion: row.webhookSecretVersion, webhookRegistrationId: row.webhookRegistrationId, lastCheckAt: row.lastCheckAt, lastErrorCode: row.lastErrorCode, lastSyncStartedAt: row.lastSyncStartedAt, lastSyncCompletedAt: row.lastSyncCompletedAt, lastSyncStatus: row.lastSyncStatus, lastSyncError: row.lastSyncError });
 
 export class Repositories {
@@ -75,6 +77,47 @@ export class Repositories {
     return rows.map(({ member, user }) => ({ id: member.id, organizationId, userId: user.id, name: user.name, email: user.email, avatar: user.avatar, role: role(member.role), status: member.status as "ACTIVE" | "INVITED" | "DISABLED", createdAt: iso(member.createdAt) }));
   }
 
+  async listDepartments(organizationId: string): Promise<Department[]> {
+    const [rows, memberships] = await Promise.all([
+      this.db.select().from(departments).where(eq(departments.organizationId, organizationId)).orderBy(departments.name),
+      this.db.select().from(departmentMembers).where(eq(departmentMembers.organizationId, organizationId)),
+    ]);
+    const membersByDepartment = new Map<string, string[]>();
+    for (const membership of memberships) membersByDepartment.set(membership.departmentId, [...(membersByDepartment.get(membership.departmentId) ?? []), membership.userId]);
+    return rows.map((row) => toDepartment(row, membersByDepartment.get(row.id) ?? []));
+  }
+
+  async getDepartment(organizationId: string, id: string) { return (await this.listDepartments(organizationId)).find((department) => department.id === id) ?? null; }
+
+  async createDepartment(input: { organizationId: string; name: string; slug: string; color: string; description: string; memberIds: string[] }) {
+    const id = randomUUID();
+    await this.db.transaction(async (tx) => {
+      await tx.insert(departments).values({ id, organizationId: input.organizationId, name: input.name, slug: input.slug, color: input.color, description: input.description, active: true });
+      if (input.memberIds.length) await tx.insert(departmentMembers).values(input.memberIds.map((userId) => ({ id: randomUUID(), organizationId: input.organizationId, departmentId: id, userId })));
+    });
+    return this.getDepartment(input.organizationId, id);
+  }
+
+  async updateDepartment(organizationId: string, id: string, input: { name?: string; slug?: string; color?: string; description?: string; active?: boolean; memberIds?: string[] }) {
+    const current = await this.getDepartment(organizationId, id); if (!current) return null;
+    await this.db.transaction(async (tx) => {
+      const values = { ...(input.name === undefined ? {} : { name: input.name }), ...(input.slug === undefined ? {} : { slug: input.slug }), ...(input.color === undefined ? {} : { color: input.color }), ...(input.description === undefined ? {} : { description: input.description }), ...(input.active === undefined ? {} : { active: input.active }), updatedAt: new Date() };
+      await tx.update(departments).set(values).where(and(eq(departments.organizationId, organizationId), eq(departments.id, id)));
+      if (input.memberIds) {
+        await tx.delete(departmentMembers).where(and(eq(departmentMembers.organizationId, organizationId), eq(departmentMembers.departmentId, id)));
+        if (input.memberIds.length) await tx.insert(departmentMembers).values(input.memberIds.map((userId) => ({ id: randomUUID(), organizationId, departmentId: id, userId })));
+      }
+    });
+    return this.getDepartment(organizationId, id);
+  }
+
+  async listRoutingRules(organizationId: string): Promise<RoutingRule[]> { return (await this.db.select().from(routingRules).where(eq(routingRules.organizationId, organizationId)).orderBy(routingRules.position, routingRules.name)).map(toRoutingRule); }
+  async createRoutingRule(input: { organizationId: string; departmentId: string; channelId?: string; name: string; keywords: string[]; position: number; active: boolean }) { const row = await this.db.insert(routingRules).values({ id: randomUUID(), ...input, channelId: input.channelId ?? null }).returning(); return toRoutingRule(row[0]); }
+  async findRoutingDepartment(organizationId: string, channelId: string | undefined, body: string): Promise<string | null> {
+    const rules = await this.db.select().from(routingRules).where(and(eq(routingRules.organizationId, organizationId), eq(routingRules.active, true))).orderBy(routingRules.position);
+    const normalized = body.toLocaleLowerCase("pt-BR"); const match = rules.find((rule) => (!rule.channelId || rule.channelId === channelId) && rule.keywords.some((keyword) => normalized.includes(keyword.toLocaleLowerCase("pt-BR")))); return match?.departmentId ?? null;
+  }
+
   async getMember(organizationId: string, userId: string) { return (await this.listMembers(organizationId)).find((member) => member.userId === userId) ?? null; }
   async countActiveOwners(organizationId: string) { return Number((await this.db.select({ count: count() }).from(organizationMembers).where(and(eq(organizationMembers.organizationId, organizationId), eq(organizationMembers.role, "OWNER"), eq(organizationMembers.status, "ACTIVE"))))[0]?.count ?? 0); }
   async updateMember(organizationId: string, userId: string, input: { role?: Role; status?: "ACTIVE" | "DISABLED" }) { await this.db.update(organizationMembers).set(input).where(and(eq(organizationMembers.organizationId, organizationId), eq(organizationMembers.userId, userId))); return this.getMember(organizationId, userId); }
@@ -112,6 +155,7 @@ export class Repositories {
     const rows = await this.db.select().from(channels).where(eq(channels.organizationId, organizationId));
     return rows.map((row) => ({ id: row.id, organizationId: row.organizationId, integrationAccountId: row.integrationAccountId ?? undefined, name: row.name, type: row.type as "WHATSAPP" | "WEBCHAT" | "EMAIL" | "INSTAGRAM", status: row.status as "CONNECTED" | "ATTENTION", conversations: row.conversations }));
   }
+  async getChannel(organizationId: string, channelId: string) { return (await this.listChannels(organizationId)).find((channel) => channel.id === channelId) ?? null; }
 
   async listConversations(organizationId: string): Promise<Conversation[]> {
     const rows = await this.db.select().from(conversations).where(eq(conversations.organizationId, organizationId)).orderBy(desc(conversations.lastMessageAt));
@@ -133,7 +177,7 @@ export class Repositories {
   private async withMessages(organizationId: string, rows: typeof conversations.$inferSelect[]): Promise<Conversation[]> {
     const ids = rows.map((row) => row.id); const messageRows = ids.length ? await this.db.select().from(messages).where(and(eq(messages.organizationId, organizationId), inArray(messages.conversationId, ids))).orderBy(messages.createdAt) : [];
     const grouped = new Map<string, Message[]>(); for (const row of messageRows) grouped.set(row.conversationId, [...(grouped.get(row.conversationId) ?? []), toMessage(row)]);
-    return rows.map((row) => ({ id: row.id, organizationId: row.organizationId, contactId: row.contactId, channelId: row.channelId, externalId: row.externalId ?? undefined, status: row.status as Conversation["status"], assignedToId: row.assignedToId ?? undefined, unread: row.unread, lastMessage: row.lastMessage, lastMessageAt: iso(row.lastMessageAt), messages: grouped.get(row.id) ?? [] }));
+    return rows.map((row) => ({ id: row.id, organizationId: row.organizationId, contactId: row.contactId, channelId: row.channelId, departmentId: row.departmentId ?? undefined, externalId: row.externalId ?? undefined, status: row.status as Conversation["status"], assignedToId: row.assignedToId ?? undefined, unread: row.unread, lastMessage: row.lastMessage, lastMessageAt: iso(row.lastMessageAt), messages: grouped.get(row.id) ?? [] }));
   }
 
   async getConversation(organizationId: string, id: string): Promise<{ conversation: Conversation; contact: Contact; channel: Awaited<ReturnType<Repositories["listChannels"]>>[number] } | null> {
@@ -149,6 +193,11 @@ export class Repositories {
 
   async updateConversationAssignment(organizationId: string, conversationId: string, assignedToId: string | null) {
     await this.db.update(conversations).set({ assignedToId, updatedAt: new Date() }).where(and(eq(conversations.organizationId, organizationId), eq(conversations.id, conversationId)));
+    return this.getConversation(organizationId, conversationId);
+  }
+
+  async updateConversationDepartment(organizationId: string, conversationId: string, departmentId: string | null) {
+    await this.db.update(conversations).set({ departmentId, updatedAt: new Date() }).where(and(eq(conversations.organizationId, organizationId), eq(conversations.id, conversationId)));
     return this.getConversation(organizationId, conversationId);
   }
 
@@ -174,6 +223,16 @@ export class Repositories {
   }
 
   async getOpportunity(organizationId: string, id: string) { return (await this.listOpportunities(organizationId)).find((item) => item.id === id) ?? null; }
+
+  async insertOpportunityEmail(input: { organizationId: string; opportunityId: string; actorId: string; fromEmail: string; toEmail: string; cc: string; bcc: string; subject: string; bodyHtml: string; bodyText: string; status: string; providerMessageId?: string; sentAt?: Date }) {
+    const row = { id: randomUUID(), organizationId: input.organizationId, opportunityId: input.opportunityId, actorId: input.actorId, fromEmail: input.fromEmail, toEmail: input.toEmail, cc: input.cc, bcc: input.bcc, subject: input.subject, bodyHtml: input.bodyHtml, bodyText: input.bodyText, status: input.status, provider: "lark_smtp", providerMessageId: input.providerMessageId ?? null, errorCode: null, sentAt: input.sentAt ?? null };
+    await this.db.insert(opportunityEmails).values(row);
+    return { id: row.id, opportunityId: row.opportunityId, from: row.fromEmail, to: row.toEmail, cc: row.cc, bcc: row.bcc, subject: row.subject, status: row.status, provider: row.provider, providerMessageId: row.providerMessageId, createdAt: new Date().toISOString(), sentAt: row.sentAt?.toISOString() ?? null };
+  }
+
+  async insertOpportunityActivity(input: { organizationId: string; opportunityId: string; actorId: string; type: string; detail: string }) {
+    await this.db.insert(opportunityActivities).values({ id: randomUUID(), ...input });
+  }
 
   async createOpportunity(input: { organizationId: string; actorId: string; title: string; contactId: string; value: number; stageKey: OpportunityStage }) {
     return this.db.transaction(async (tx) => {
@@ -214,11 +273,18 @@ export class Repositories {
     const row = await this.db.insert(channels).values({ id: `channel-${input.organizationId}-${input.externalId}`, organizationId: input.organizationId, integrationAccountId: input.integrationAccountId, externalId: input.externalId, name: input.name, type: input.type, status: "CONNECTED", conversations: 0 }).onConflictDoUpdate({ target: [channels.organizationId, channels.externalId], set: { integrationAccountId: input.integrationAccountId, name: input.name, type: input.type, status: "CONNECTED", updatedAt: new Date() } }).returning();
     return row[0];
   }
-  async upsertSyncedConversation(input: { organizationId: string; externalId: string; contactId: string; channelId: string; status: string; assignedToId?: string; lastMessage: string; lastMessageAt: Date }) {
+  async upsertSyncedConversation(input: { organizationId: string; externalId: string; contactId: string; channelId: string; departmentId?: string | null; status: string; assignedToId?: string; lastMessage: string; lastMessageAt: Date }) {
     const existing = (await this.db.select().from(conversations).where(and(eq(conversations.organizationId, input.organizationId), eq(conversations.externalId, input.externalId))).limit(1))[0];
-    if (existing) { await this.db.update(conversations).set({ contactId: input.contactId, channelId: input.channelId, status: input.status, assignedToId: input.assignedToId ?? null, lastMessage: input.lastMessage, lastMessageAt: input.lastMessageAt, updatedAt: new Date() }).where(eq(conversations.id, existing.id)); return existing.id; }
-    const row = await this.db.insert(conversations).values({ id: `conversation-${input.organizationId}-${input.externalId}`, organizationId: input.organizationId, externalId: input.externalId, contactId: input.contactId, channelId: input.channelId, status: input.status, assignedToId: input.assignedToId ?? null, unread: 0, lastMessage: input.lastMessage, lastMessageAt: input.lastMessageAt }).returning({ id: conversations.id });
+    if (existing) { await this.db.update(conversations).set({ contactId: input.contactId, channelId: input.channelId, departmentId: input.departmentId ?? existing.departmentId ?? null, status: input.status, assignedToId: input.assignedToId ?? null, lastMessage: input.lastMessage, lastMessageAt: input.lastMessageAt, updatedAt: new Date() }).where(eq(conversations.id, existing.id)); return existing.id; }
+    const row = await this.db.insert(conversations).values({ id: `conversation-${input.organizationId}-${input.externalId}`, organizationId: input.organizationId, externalId: input.externalId, contactId: input.contactId, channelId: input.channelId, departmentId: input.departmentId ?? null, status: input.status, assignedToId: input.assignedToId ?? null, unread: 0, lastMessage: input.lastMessage, lastMessageAt: input.lastMessageAt }).returning({ id: conversations.id });
     return row[0].id;
+  }
+  async upsertInboundConversation(input: { organizationId: string; integrationAccountId: string; externalConversationId: string; contactPhone: string; contactName: string; channelExternalId: string; channelName: string; channelType: string; lastMessage: string; lastMessageAt: Date }) {
+    const owner = await this.findAnyActiveMember(input.organizationId); if (!owner) throw new Error("OWNER_NOT_FOUND");
+    const contact = await this.upsertSyncedContact({ organizationId: input.organizationId, externalId: input.externalConversationId, name: input.contactName, email: "", phone: input.contactPhone, ownerId: owner.userId });
+    const channel = await this.upsertSyncedChannel({ organizationId: input.organizationId, integrationAccountId: input.integrationAccountId, externalId: input.channelExternalId, name: input.channelName, type: input.channelType });
+    const departmentId = await this.findRoutingDepartment(input.organizationId, channel.id, input.lastMessage);
+    return this.upsertSyncedConversation({ organizationId: input.organizationId, externalId: input.externalConversationId, contactId: contact.id, channelId: channel.id, departmentId, status: "OPEN", lastMessage: input.lastMessage, lastMessageAt: input.lastMessageAt });
   }
   async upsertSyncedMessage(input: { organizationId: string; conversationId: string; externalId?: string; sender: "CONTACT" | "AGENT" | "SYSTEM"; authorName: string; body: string; createdAt: Date; internal?: boolean }) {
     if (input.externalId) { const row = await this.db.insert(messages).values({ id: `message-${input.organizationId}-${input.externalId}`, ...input, internal: input.internal ?? false }).onConflictDoUpdate({ target: [messages.organizationId, messages.externalId], set: { body: input.body, authorName: input.authorName, sender: input.sender, createdAt: input.createdAt, internal: input.internal ?? false } }).returning(); return row[0]; }

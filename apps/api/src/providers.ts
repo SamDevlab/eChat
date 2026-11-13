@@ -101,4 +101,67 @@ export class ChatwootProvider implements MessagingProvider {
   }
 }
 
-export const createMessagingProvider = (): MessagingProvider => process.env.MESSAGING_PROVIDER === "chatwoot" ? new ChatwootProvider() : new MockMessagingProvider();
+export type MetaWhatsAppProviderConfig = { baseUrl: string; accessToken: string; phoneNumberId: string; appSecret?: string };
+
+export class MetaWhatsAppProvider implements MessagingProvider {
+  readonly name = "meta_whatsapp";
+  private readonly baseUrl: string;
+  private readonly accessToken: string;
+  private readonly phoneNumberId: string;
+  private readonly appSecret?: string;
+
+  constructor(config: MetaWhatsAppProviderConfig) {
+    this.baseUrl = config.baseUrl.replace(/\/$/, ""); this.accessToken = config.accessToken; this.phoneNumberId = config.phoneNumberId; this.appSecret = config.appSecret;
+  }
+
+  private async request(path: string, init: RequestInit = {}): Promise<any> {
+    if (!this.baseUrl || !this.accessToken || !this.phoneNumberId) throw new Error("WhatsApp Cloud API não configurada");
+    const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const response = await fetch(`${this.baseUrl}${path}`, { ...init, headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.accessToken}`, ...(init.headers ?? {}) }, signal: controller.signal });
+      const body = await response.json().catch(() => undefined);
+      if (!response.ok) throw Object.assign(new Error(`WhatsApp Cloud API respondeu HTTP ${response.status}`), { status: response.status });
+      return body;
+    } catch (error) { if (error instanceof Error && error.name === "AbortError") throw new Error("Timeout ao consultar WhatsApp Cloud API"); throw error; } finally { clearTimeout(timeout); }
+  }
+
+  async testConnection() {
+    const body = await this.request(`/${encodeURIComponent(this.phoneNumberId)}?fields=display_phone_number,verified_name,quality_rating`);
+    return { accountId: String(body?.id ?? this.phoneNumberId), name: typeof body?.verified_name === "string" ? body.verified_name : typeof body?.display_phone_number === "string" ? body.display_phone_number : undefined };
+  }
+
+  async sendMessage(input: { conversationId: string; externalConversationId?: string; recipientPhone?: string; body: string; internal?: boolean }): Promise<NormalizedOutgoingMessage> {
+    if (input.internal) return { body: input.body, createdAt: new Date().toISOString(), sender: "AGENT", authorName: "", internal: true };
+    const recipient = (input.recipientPhone ?? input.externalConversationId ?? "").replace(/\D/g, ""); if (!recipient) throw new Error("Contato sem telefone para envio no WhatsApp");
+    const body = await this.request(`/${encodeURIComponent(this.phoneNumberId)}/messages`, { method: "POST", body: JSON.stringify({ messaging_product: "whatsapp", recipient_type: "individual", to: recipient, type: "text", text: { preview_url: false, body: input.body } }) });
+    const externalId = body?.messages?.[0]?.id; if (typeof externalId !== "string") throw new Error("Resposta inválida do WhatsApp Cloud API");
+    return { externalId, body: input.body, createdAt: new Date().toISOString(), sender: "AGENT", authorName: "" };
+  }
+
+  normalizeConversation(input: unknown): Conversation { return conversationSchema.parse(input); }
+  normalizeMessage(input: unknown): Message { return messageSchema.parse(input); }
+  normalizeContact(input: unknown): Contact { return contactSchema.parse(input); }
+
+  verifyWebhook(headers: Record<string, string | undefined>, rawBody: string): boolean {
+    const signature = headers["x-hub-signature-256"]; if (!this.appSecret || !signature?.startsWith("sha256=")) return false;
+    const expected = `sha256=${createHmac("sha256", this.appSecret).update(rawBody).digest("hex")}`; return expected.length === signature.length && timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+  }
+
+  normalizeWebhook(input: unknown): NormalizedWebhookEvent[] {
+    if (!input || typeof input !== "object") return []; const root = input as { entry?: unknown[] }; const events: NormalizedWebhookEvent[] = [];
+    for (const entry of root.entry ?? []) {
+      if (!entry || typeof entry !== "object") continue; const changes = (entry as { changes?: unknown[] }).changes ?? [];
+      for (const change of changes) {
+        if (!change || typeof change !== "object") continue; const value = (change as { value?: any }).value; if (!value || typeof value !== "object") continue;
+        const phoneNumberId = typeof value.metadata?.phone_number_id === "string" ? value.metadata.phone_number_id : this.phoneNumberId; const contactName = typeof value.contacts?.[0]?.profile?.name === "string" ? value.contacts[0].profile.name : "Contato WhatsApp";
+        for (const message of Array.isArray(value.messages) ? value.messages : []) {
+          if (!message || typeof message !== "object" || typeof message.id !== "string" || typeof message.from !== "string") continue; const body = message.type === "text" && typeof message.text?.body === "string" ? message.text.body : ""; if (!body) continue;
+          events.push({ externalEventId: message.id, externalAccountId: phoneNumberId, externalConversationId: `meta:${message.from}`, externalMessageId: message.id, body, createdAt: isoFromExternal(message.timestamp), sender: "CONTACT", authorName: contactName, contactPhone: message.from, channelExternalId: phoneNumberId, channelName: "WhatsApp Cloud API", channelType: "WHATSAPP" });
+        }
+      }
+    }
+    return events;
+  }
+}
+
+export const createMessagingProvider = (): MessagingProvider => process.env.MESSAGING_PROVIDER === "chatwoot" ? new ChatwootProvider() : process.env.MESSAGING_PROVIDER === "meta_whatsapp" ? new MetaWhatsAppProvider({ baseUrl: process.env.META_GRAPH_BASE_URL ?? "", accessToken: process.env.META_WHATSAPP_ACCESS_TOKEN ?? "", phoneNumberId: process.env.META_WHATSAPP_PHONE_NUMBER_ID ?? "", appSecret: process.env.META_APP_SECRET }) : new MockMessagingProvider();

@@ -18,9 +18,9 @@ npm run dev
 
 Abra `http://localhost:5173` e use **Criar um novo workspace** para iniciar sem uma senha pré-configurada. O cadastro cria a organização, Owner, pipeline padrão e sessão em uma transação. O seed continua disponível para dados de demonstração:
 
-- `owner@echat.local` / `local-only`
-- `admin@echat.local` / `local-only`
-- `agente@echat.local` / `local-only`
+- `owner@echat.local` / `12345678`
+- `admin@echat.local` / `12345678`
+- `agente@echat.local` / `12345678`
 
 O seed é idempotente e é bloqueado quando `NODE_ENV=production`. Para testes de banco, configure um banco separado em `DATABASE_URL_TEST` e execute `npm run test:integration`; sem essa variável, o gate é reportado como bloqueado, sem tocar no banco de desenvolvimento.
 
@@ -41,5 +41,7 @@ git diff --check
 ```
 
 Chatwoot é opcional. A conexão customer-ready é configurada em **Canais** por um Owner/Admin. O adapter usa server-to-server os endpoints oficiais de conta, contatos, conversas, mensagens e webhooks; os segredos nunca são enviados ao browser. Para um webhook realmente registrável, defina `PUBLIC_APP_URL` com uma URL HTTPS pública; em `localhost`, o teste de conexão não tenta registrar webhook externo.
+
+O provider `meta_whatsapp` prepara a integração oficial da WhatsApp Cloud API por organização. Informe o Phone Number ID, access token e App Secret em **Canais**; o webhook de produção é `POST /api/v1/webhooks/meta-whatsapp` e a verificação GET usa `META_WHATSAPP_VERIFY_TOKEN`. O base URL deve incluir a versão do Graph API usada pela sua aplicação, quando necessário. A configuração real ainda depende de um App/Business Portfolio/WABA aprovados na Meta e de uma URL HTTPS pública.
 
 O design system de referência permanece congelado em [`docs/design-system.md`](docs/design-system.md). Exportação de screenshots é um passo manual e não faz parte deste gate.
