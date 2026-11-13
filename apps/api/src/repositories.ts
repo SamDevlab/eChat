@@ -1,21 +1,23 @@
-import { and, count, desc, eq, gt, ilike, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, gt, ilike, inArray, isNull, or } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { Database } from "@echat/db";
-import { authSessions, channels, contactIdentities, contactTags, contacts, conversations, integrationAccounts, messages, opportunities, opportunityActivities, organizationInvites, opportunityConversations, organizationMembers, organizations, pipelineStages, pipelines, tags, users, webhookEvents } from "@echat/db";
-import type { ChannelType, Contact, ContactIdentity, Conversation, DeliveryStatus, Message, MessageType, Opportunity, OpportunityStage, PipelineStage, ProviderType, Role, SessionUser, User } from "@echat/shared";
+import { authSessions, channels, contactTags, contacts, conversations, departmentMembers, departments, integrationAccounts, messages, opportunities, opportunityActivities, opportunityEmails, organizationInvites, opportunityConversations, organizationMembers, organizations, pipelineStages, pipelines, routingRules, tags, users, webhookEvents } from "@echat/db";
+import type { Contact, Conversation, Department, Message, Opportunity, OpportunityStage, PipelineStage, Role, RoutingRule, SessionUser, User } from "@echat/shared";
 
-const role = (value: string): Role => value === "OWNER" || value === "ADMIN" ? value : "AGENT";
+const role = (value: string): Role => ["OWNER", "ADMIN", "MANAGER", "SELLER", "SUPERVISOR", "FINANCE", "AGENT"].includes(value) ? value as Role : "AGENT";
 const stageKey = (value: string): OpportunityStage => value as OpportunityStage;
 const iso = (value: Date | string): string => value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 
 export type AuthenticatedRecord = { sessionId: string; user: SessionUser; expiresAt: Date };
-export type IntegrationRecord = { id: string; organizationId: string; provider: string; providerType: ProviderType; displayName: string; externalAccountId: string; providerInboxId: string | null; channelType: ChannelType; status: string; baseUrl: string | null; credentialRef: string | null; credentialCiphertext: string | null; credentialIv: string | null; credentialTag: string | null; credentialVersion: number | null; webhookSecretCiphertext: string | null; webhookSecretIv: string | null; webhookSecretTag: string | null; webhookSecretVersion: number | null; webhookRegistrationId: string | null; lastCheckAt: Date | null; lastErrorCode: string | null; lastErrorAt: Date | null; lastSyncStartedAt: Date | null; lastSyncCompletedAt: Date | null; lastSyncAt: Date | null; lastSyncStatus: string | null; lastSyncError: string | null };
+export type IntegrationRecord = { id: string; organizationId: string; provider: string; displayName: string; externalAccountId: string; status: string; baseUrl: string | null; credentialRef: string | null; credentialCiphertext: string | null; credentialIv: string | null; credentialTag: string | null; credentialVersion: number | null; webhookSecretCiphertext: string | null; webhookSecretIv: string | null; webhookSecretTag: string | null; webhookSecretVersion: number | null; webhookRegistrationId: string | null; lastCheckAt: Date | null; lastErrorCode: string | null; lastSyncStartedAt: Date | null; lastSyncCompletedAt: Date | null; lastSyncStatus: string | null; lastSyncError: string | null };
 
 const toUser = (row: { id: string; name: string; email: string; avatar: string }, organizationId: string, membershipRole: string): User => ({ id: row.id, organizationId, name: row.name, email: row.email, role: role(membershipRole), avatar: row.avatar });
-const toContact = (row: typeof contacts.$inferSelect, tagNames: string[], opportunityCount: number, identities: Contact["identities"] = []): Contact => ({ id: row.id, organizationId: row.organizationId, name: row.name, company: row.company, phone: row.phone, email: row.email, tags: tagNames, ownerId: row.ownerId, lastConversationAt: iso(row.lastConversationAt), opportunities: opportunityCount, notes: row.notes, identities });
-const toMessage = (row: typeof messages.$inferSelect): Message => ({ id: row.id, organizationId: row.organizationId, externalId: row.externalId ?? undefined, externalMessageId: row.externalId ?? undefined, conversationId: row.conversationId, channelType: (row.channelType as ChannelType | null) ?? undefined, providerType: (row.providerType as ProviderType | null) ?? undefined, direction: row.direction as Message["direction"], senderIdentity: row.senderIdentity ?? undefined, recipientIdentity: row.recipientIdentity ?? undefined, sender: row.sender as Message["sender"], authorName: row.authorName, body: row.body, messageType: row.messageType as MessageType, deliveryStatus: row.deliveryStatus as DeliveryStatus, providerCreatedAt: row.providerCreatedAt ? iso(row.providerCreatedAt) : undefined, createdAt: iso(row.createdAt), internal: row.internal });
+const toContact = (row: typeof contacts.$inferSelect, tagNames: string[], opportunityCount: number): Contact => ({ id: row.id, organizationId: row.organizationId, name: row.name, company: row.company, phone: row.phone, email: row.email, tags: tagNames, ownerId: row.ownerId, lastConversationAt: iso(row.lastConversationAt), opportunities: opportunityCount, notes: row.notes });
+const toMessage = (row: typeof messages.$inferSelect): Message => ({ id: row.id, organizationId: row.organizationId, externalId: row.externalId ?? undefined, conversationId: row.conversationId, sender: row.sender as Message["sender"], authorName: row.authorName, body: row.body, createdAt: iso(row.createdAt), internal: row.internal });
 const toStage = (row: typeof pipelineStages.$inferSelect): PipelineStage => ({ id: row.id, organizationId: row.organizationId, name: row.name, key: stageKey(row.key), order: row.position, color: row.color });
-const toIntegration = (row: typeof integrationAccounts.$inferSelect): IntegrationRecord => ({ id: row.id, organizationId: row.organizationId, provider: row.provider, providerType: row.providerType as ProviderType, displayName: row.displayName, externalAccountId: row.externalAccountId, providerInboxId: row.providerInboxId, channelType: row.channelType as ChannelType, status: row.status, baseUrl: row.baseUrl, credentialRef: row.credentialRef, credentialCiphertext: row.credentialCiphertext, credentialIv: row.credentialIv, credentialTag: row.credentialTag, credentialVersion: row.credentialVersion, webhookSecretCiphertext: row.webhookSecretCiphertext, webhookSecretIv: row.webhookSecretIv, webhookSecretTag: row.webhookSecretTag, webhookSecretVersion: row.webhookSecretVersion, webhookRegistrationId: row.webhookRegistrationId, lastCheckAt: row.lastCheckAt, lastErrorCode: row.lastErrorCode, lastErrorAt: row.lastErrorAt, lastSyncStartedAt: row.lastSyncStartedAt, lastSyncCompletedAt: row.lastSyncCompletedAt, lastSyncAt: row.lastSyncAt, lastSyncStatus: row.lastSyncStatus, lastSyncError: row.lastSyncError });
+const toDepartment = (row: typeof departments.$inferSelect, memberIds: string[]): Department => ({ id: row.id, organizationId: row.organizationId, name: row.name, slug: row.slug, color: row.color, description: row.description, active: row.active, memberIds });
+const toRoutingRule = (row: typeof routingRules.$inferSelect): RoutingRule => ({ id: row.id, organizationId: row.organizationId, departmentId: row.departmentId, channelId: row.channelId ?? undefined, name: row.name, keywords: row.keywords, position: row.position, active: row.active });
+const toIntegration = (row: typeof integrationAccounts.$inferSelect): IntegrationRecord => ({ id: row.id, organizationId: row.organizationId, provider: row.provider, displayName: row.displayName, externalAccountId: row.externalAccountId, status: row.status, baseUrl: row.baseUrl, credentialRef: row.credentialRef, credentialCiphertext: row.credentialCiphertext, credentialIv: row.credentialIv, credentialTag: row.credentialTag, credentialVersion: row.credentialVersion, webhookSecretCiphertext: row.webhookSecretCiphertext, webhookSecretIv: row.webhookSecretIv, webhookSecretTag: row.webhookSecretTag, webhookSecretVersion: row.webhookSecretVersion, webhookRegistrationId: row.webhookRegistrationId, lastCheckAt: row.lastCheckAt, lastErrorCode: row.lastErrorCode, lastSyncStartedAt: row.lastSyncStartedAt, lastSyncCompletedAt: row.lastSyncCompletedAt, lastSyncStatus: row.lastSyncStatus, lastSyncError: row.lastSyncError });
 
 export class Repositories {
   constructor(private readonly db: Database) {}
@@ -75,6 +77,47 @@ export class Repositories {
     return rows.map(({ member, user }) => ({ id: member.id, organizationId, userId: user.id, name: user.name, email: user.email, avatar: user.avatar, role: role(member.role), status: member.status as "ACTIVE" | "INVITED" | "DISABLED", createdAt: iso(member.createdAt) }));
   }
 
+  async listDepartments(organizationId: string): Promise<Department[]> {
+    const [rows, memberships] = await Promise.all([
+      this.db.select().from(departments).where(eq(departments.organizationId, organizationId)).orderBy(departments.name),
+      this.db.select().from(departmentMembers).where(eq(departmentMembers.organizationId, organizationId)),
+    ]);
+    const membersByDepartment = new Map<string, string[]>();
+    for (const membership of memberships) membersByDepartment.set(membership.departmentId, [...(membersByDepartment.get(membership.departmentId) ?? []), membership.userId]);
+    return rows.map((row) => toDepartment(row, membersByDepartment.get(row.id) ?? []));
+  }
+
+  async getDepartment(organizationId: string, id: string) { return (await this.listDepartments(organizationId)).find((department) => department.id === id) ?? null; }
+
+  async createDepartment(input: { organizationId: string; name: string; slug: string; color: string; description: string; memberIds: string[] }) {
+    const id = randomUUID();
+    await this.db.transaction(async (tx) => {
+      await tx.insert(departments).values({ id, organizationId: input.organizationId, name: input.name, slug: input.slug, color: input.color, description: input.description, active: true });
+      if (input.memberIds.length) await tx.insert(departmentMembers).values(input.memberIds.map((userId) => ({ id: randomUUID(), organizationId: input.organizationId, departmentId: id, userId })));
+    });
+    return this.getDepartment(input.organizationId, id);
+  }
+
+  async updateDepartment(organizationId: string, id: string, input: { name?: string; slug?: string; color?: string; description?: string; active?: boolean; memberIds?: string[] }) {
+    const current = await this.getDepartment(organizationId, id); if (!current) return null;
+    await this.db.transaction(async (tx) => {
+      const values = { ...(input.name === undefined ? {} : { name: input.name }), ...(input.slug === undefined ? {} : { slug: input.slug }), ...(input.color === undefined ? {} : { color: input.color }), ...(input.description === undefined ? {} : { description: input.description }), ...(input.active === undefined ? {} : { active: input.active }), updatedAt: new Date() };
+      await tx.update(departments).set(values).where(and(eq(departments.organizationId, organizationId), eq(departments.id, id)));
+      if (input.memberIds) {
+        await tx.delete(departmentMembers).where(and(eq(departmentMembers.organizationId, organizationId), eq(departmentMembers.departmentId, id)));
+        if (input.memberIds.length) await tx.insert(departmentMembers).values(input.memberIds.map((userId) => ({ id: randomUUID(), organizationId, departmentId: id, userId })));
+      }
+    });
+    return this.getDepartment(organizationId, id);
+  }
+
+  async listRoutingRules(organizationId: string): Promise<RoutingRule[]> { return (await this.db.select().from(routingRules).where(eq(routingRules.organizationId, organizationId)).orderBy(routingRules.position, routingRules.name)).map(toRoutingRule); }
+  async createRoutingRule(input: { organizationId: string; departmentId: string; channelId?: string; name: string; keywords: string[]; position: number; active: boolean }) { const row = await this.db.insert(routingRules).values({ id: randomUUID(), ...input, channelId: input.channelId ?? null }).returning(); return toRoutingRule(row[0]); }
+  async findRoutingDepartment(organizationId: string, channelId: string | undefined, body: string): Promise<string | null> {
+    const rules = await this.db.select().from(routingRules).where(and(eq(routingRules.organizationId, organizationId), eq(routingRules.active, true))).orderBy(routingRules.position);
+    const normalized = body.toLocaleLowerCase("pt-BR"); const match = rules.find((rule) => (!rule.channelId || rule.channelId === channelId) && rule.keywords.some((keyword) => normalized.includes(keyword.toLocaleLowerCase("pt-BR")))); return match?.departmentId ?? null;
+  }
+
   async getMember(organizationId: string, userId: string) { return (await this.listMembers(organizationId)).find((member) => member.userId === userId) ?? null; }
   async countActiveOwners(organizationId: string) { return Number((await this.db.select({ count: count() }).from(organizationMembers).where(and(eq(organizationMembers.organizationId, organizationId), eq(organizationMembers.role, "OWNER"), eq(organizationMembers.status, "ACTIVE"))))[0]?.count ?? 0); }
   async updateMember(organizationId: string, userId: string, input: { role?: Role; status?: "ACTIVE" | "DISABLED" }) { await this.db.update(organizationMembers).set(input).where(and(eq(organizationMembers.organizationId, organizationId), eq(organizationMembers.userId, userId))); return this.getMember(organizationId, userId); }
@@ -90,15 +133,13 @@ export class Repositories {
   }
 
   async listContacts(organizationId: string): Promise<Contact[]> {
-    const [rows, opportunitiesRows, tagsByContact, identityRows] = await Promise.all([
+    const [rows, opportunitiesRows, tagsByContact] = await Promise.all([
       this.db.select().from(contacts).where(eq(contacts.organizationId, organizationId)),
       this.db.select({ contactId: opportunities.contactId }).from(opportunities).where(eq(opportunities.organizationId, organizationId)),
       this.tagMap(organizationId),
-      this.db.select().from(contactIdentities).where(eq(contactIdentities.organizationId, organizationId)),
     ]);
     const counts = new Map<string, number>(); for (const item of opportunitiesRows) counts.set(item.contactId, (counts.get(item.contactId) ?? 0) + 1);
-    const identities = new Map<string, Contact["identities"]>(); for (const row of identityRows) identities.set(row.contactId, [...(identities.get(row.contactId) ?? []), { channelType: row.channelType as ChannelType, phone: row.phone ?? undefined, email: row.email ?? undefined, username: row.username ?? undefined }]);
-    return rows.map((row) => toContact(row, tagsByContact.get(row.id) ?? [], counts.get(row.id) ?? 0, identities.get(row.id) ?? []));
+    return rows.map((row) => toContact(row, tagsByContact.get(row.id) ?? [], counts.get(row.id) ?? 0));
   }
 
   async searchContacts(organizationId: string, query: string, page = 1, pageSize = 25) {
@@ -112,27 +153,23 @@ export class Repositories {
 
   async listChannels(organizationId: string) {
     const rows = await this.db.select().from(channels).where(eq(channels.organizationId, organizationId));
-    return rows.map((row) => ({ id: row.id, organizationId: row.organizationId, integrationAccountId: row.integrationAccountId ?? undefined, name: row.name, type: row.type as ChannelType, providerType: row.providerType ? row.providerType as ProviderType : undefined, status: row.status as "CONNECTED" | "ATTENTION", conversations: row.conversations }));
+    return rows.map((row) => ({ id: row.id, organizationId: row.organizationId, integrationAccountId: row.integrationAccountId ?? undefined, name: row.name, type: row.type as "WHATSAPP" | "WEBCHAT" | "EMAIL" | "INSTAGRAM", status: row.status as "CONNECTED" | "ATTENTION", conversations: row.conversations }));
   }
+  async getChannel(organizationId: string, channelId: string) { return (await this.listChannels(organizationId)).find((channel) => channel.id === channelId) ?? null; }
 
   async listConversations(organizationId: string): Promise<Conversation[]> {
     const rows = await this.db.select().from(conversations).where(eq(conversations.organizationId, organizationId)).orderBy(desc(conversations.lastMessageAt));
     return this.withMessages(organizationId, rows);
   }
 
-  async searchConversations(organizationId: string, input: { query?: string; status?: string; assignedToId?: string; channelId?: string; unreadOnly?: boolean; page?: number; pageSize?: number }) {
-    const page = Math.max(1, input.page ?? 1); const pageSize = Math.min(250, Math.max(1, input.pageSize ?? 25)); const filters = [eq(conversations.organizationId, organizationId)];
+  async searchConversations(organizationId: string, input: { query?: string; status?: string; assignedToId?: string; channelId?: string; page?: number; pageSize?: number }) {
+    const page = input.page ?? 1; const pageSize = input.pageSize ?? 25; const filters = [eq(conversations.organizationId, organizationId)];
     if (input.status && ["OPEN", "WAITING", "RESOLVED"].includes(input.status)) filters.push(eq(conversations.status, input.status));
+    if (input.assignedToId === "mine") filters.push(isNull(conversations.assignedToId));
+    if (input.assignedToId && input.assignedToId !== "mine" && input.assignedToId !== "unassigned") filters.push(eq(conversations.assignedToId, input.assignedToId));
     if (input.assignedToId === "unassigned") filters.push(isNull(conversations.assignedToId));
-    else if (input.assignedToId) filters.push(eq(conversations.assignedToId, input.assignedToId));
     if (input.channelId) filters.push(eq(conversations.channelId, input.channelId));
-    if (input.unreadOnly) filters.push(gt(conversations.unread, 0));
-    const normalized = input.query?.trim().slice(0, 200);
-    if (normalized) {
-      const contactMatches = this.db.select({ conversationId: conversations.id }).from(conversations).innerJoin(contacts, and(eq(contacts.id, conversations.contactId), eq(contacts.organizationId, organizationId))).where(and(eq(conversations.organizationId, organizationId), or(ilike(contacts.name, `%${normalized}%`), ilike(contacts.phone, `%${normalized}%`), ilike(contacts.email, `%${normalized}%`), ilike(contacts.company, `%${normalized}%`))));
-      const messageMatches = this.db.select({ conversationId: messages.conversationId }).from(messages).where(and(eq(messages.organizationId, organizationId), ilike(messages.body, `%${normalized}%`)));
-      filters.push(or(ilike(conversations.lastMessage, `%${normalized}%`), inArray(conversations.id, contactMatches), inArray(conversations.id, messageMatches))!);
-    }
+    const normalized = input.query?.trim(); if (normalized) filters.push(or(ilike(conversations.lastMessage, `%${normalized}%`), ilike(conversations.externalId, `%${normalized}%`))!);
     const where = and(...filters); const [rows, total] = await Promise.all([this.db.select().from(conversations).where(where).orderBy(desc(conversations.lastMessageAt)).limit(pageSize).offset((page - 1) * pageSize), this.db.select({ count: count() }).from(conversations).where(where)]);
     return { items: await this.withMessages(organizationId, rows), total: Number(total[0]?.count ?? 0), page, pageSize };
   }
@@ -140,7 +177,7 @@ export class Repositories {
   private async withMessages(organizationId: string, rows: typeof conversations.$inferSelect[]): Promise<Conversation[]> {
     const ids = rows.map((row) => row.id); const messageRows = ids.length ? await this.db.select().from(messages).where(and(eq(messages.organizationId, organizationId), inArray(messages.conversationId, ids))).orderBy(messages.createdAt) : [];
     const grouped = new Map<string, Message[]>(); for (const row of messageRows) grouped.set(row.conversationId, [...(grouped.get(row.conversationId) ?? []), toMessage(row)]);
-    return rows.map((row) => ({ id: row.id, organizationId: row.organizationId, contactId: row.contactId, channelId: row.channelId, externalId: row.externalId ?? undefined, externalConversationId: row.externalId ?? undefined, channelType: row.channelType as ChannelType | undefined, providerType: row.providerType as ProviderType | undefined, channelConnectionId: row.channelConnectionId ?? undefined, status: row.status as Conversation["status"], assignedToId: row.assignedToId ?? undefined, unread: row.unread, lastMessage: row.lastMessage, lastMessageAt: iso(row.lastMessageAt), messages: grouped.get(row.id) ?? [] }));
+    return rows.map((row) => ({ id: row.id, organizationId: row.organizationId, contactId: row.contactId, channelId: row.channelId, departmentId: row.departmentId ?? undefined, externalId: row.externalId ?? undefined, status: row.status as Conversation["status"], assignedToId: row.assignedToId ?? undefined, unread: row.unread, lastMessage: row.lastMessage, lastMessageAt: iso(row.lastMessageAt), messages: grouped.get(row.id) ?? [] }));
   }
 
   async getConversation(organizationId: string, id: string): Promise<{ conversation: Conversation; contact: Contact; channel: Awaited<ReturnType<Repositories["listChannels"]>>[number] } | null> {
@@ -159,45 +196,23 @@ export class Repositories {
     return this.getConversation(organizationId, conversationId);
   }
 
+  async updateConversationDepartment(organizationId: string, conversationId: string, departmentId: string | null) {
+    await this.db.update(conversations).set({ departmentId, updatedAt: new Date() }).where(and(eq(conversations.organizationId, organizationId), eq(conversations.id, conversationId)));
+    return this.getConversation(organizationId, conversationId);
+  }
+
   async updateConversationStatus(organizationId: string, conversationId: string, status: "OPEN" | "WAITING" | "RESOLVED") {
     await this.db.update(conversations).set({ status, updatedAt: new Date() }).where(and(eq(conversations.organizationId, organizationId), eq(conversations.id, conversationId)));
     return this.getConversation(organizationId, conversationId);
   }
 
-  async markConversationRead(organizationId: string, conversationId: string) {
-    await this.db.update(conversations).set({ unread: 0, updatedAt: new Date() }).where(and(eq(conversations.organizationId, organizationId), eq(conversations.id, conversationId)));
-    return this.getConversation(organizationId, conversationId);
-  }
-
-  async reserveOutgoingMessage(input: { organizationId: string; conversationId: string; channelConnectionId?: string; channelType?: ChannelType; providerType?: ProviderType; idempotencyKey: string; body: string; authorName: string; internal: boolean }) {
+  async insertOutgoingMessage(input: { organizationId: string; conversationId: string; externalId?: string; body: string; authorName: string; createdAt: Date; internal: boolean }) {
     return this.db.transaction(async (tx) => {
-      const now = new Date();
-      const row = { id: randomUUID(), organizationId: input.organizationId, conversationId: input.conversationId, channelConnectionId: input.channelConnectionId ?? null, channelType: input.channelType ?? null, providerType: input.providerType ?? null, externalId: null, idempotencyKey: input.idempotencyKey, direction: "OUTBOUND", senderIdentity: null, recipientIdentity: null, sender: "AGENT", authorName: input.authorName, body: input.body, messageType: "TEXT", deliveryStatus: "PENDING", providerCreatedAt: now, internal: input.internal, createdAt: now };
-      const inserted = await tx.insert(messages).values(row).onConflictDoNothing({ target: [messages.organizationId, messages.conversationId, messages.idempotencyKey] }).returning();
-      if (inserted.length) return { message: toMessage(inserted[0]), created: true };
-      const existing = (await tx.select().from(messages).where(and(eq(messages.organizationId, input.organizationId), eq(messages.conversationId, input.conversationId), eq(messages.idempotencyKey, input.idempotencyKey))).limit(1))[0];
-      if (!existing) throw new Error("IDEMPOTENCY_RECORD_UNAVAILABLE");
-      return { message: toMessage(existing), created: false };
-    });
-  }
-
-  async completeOutgoingMessage(input: { organizationId: string; conversationId: string; messageId: string; externalId?: string; body: string; createdAt: Date; deliveryStatus: DeliveryStatus }) {
-    return this.db.transaction(async (tx) => {
-      const updated = await tx.update(messages).set({ externalId: input.externalId ?? null, body: input.body, deliveryStatus: input.deliveryStatus, createdAt: input.createdAt, providerCreatedAt: input.createdAt }).where(and(eq(messages.organizationId, input.organizationId), eq(messages.conversationId, input.conversationId), eq(messages.id, input.messageId))).returning();
-      const row = updated[0];
-      if (!row) return null;
-      await tx.update(conversations).set({
-        lastMessage: sql`CASE WHEN ${conversations.lastMessageAt} <= ${input.createdAt.toISOString()}::timestamptz THEN ${input.body} ELSE ${conversations.lastMessage} END`,
-        lastMessageAt: sql`GREATEST(${conversations.lastMessageAt}, ${input.createdAt.toISOString()}::timestamptz)`,
-        updatedAt: new Date(),
-      }).where(and(eq(conversations.organizationId, input.organizationId), eq(conversations.id, input.conversationId)));
+      const row = { id: randomUUID(), organizationId: input.organizationId, conversationId: input.conversationId, externalId: input.externalId ?? null, sender: "AGENT", authorName: input.authorName, body: input.body, internal: input.internal, createdAt: input.createdAt };
+      await tx.insert(messages).values(row);
+      await tx.update(conversations).set({ lastMessage: input.body, lastMessageAt: input.createdAt, updatedAt: new Date() }).where(and(eq(conversations.organizationId, input.organizationId), eq(conversations.id, input.conversationId)));
       return toMessage(row);
     });
-  }
-
-  async failOutgoingMessage(organizationId: string, messageId: string) {
-    const rows = await this.db.update(messages).set({ deliveryStatus: "FAILED" }).where(and(eq(messages.organizationId, organizationId), eq(messages.id, messageId))).returning();
-    return rows[0] ? toMessage(rows[0]) : null;
   }
 
   async listStages(organizationId: string): Promise<PipelineStage[]> { return (await this.db.select().from(pipelineStages).where(eq(pipelineStages.organizationId, organizationId)).orderBy(pipelineStages.position)).map(toStage); }
@@ -208,6 +223,16 @@ export class Repositories {
   }
 
   async getOpportunity(organizationId: string, id: string) { return (await this.listOpportunities(organizationId)).find((item) => item.id === id) ?? null; }
+
+  async insertOpportunityEmail(input: { organizationId: string; opportunityId: string; actorId: string; fromEmail: string; toEmail: string; cc: string; bcc: string; subject: string; bodyHtml: string; bodyText: string; status: string; providerMessageId?: string; sentAt?: Date }) {
+    const row = { id: randomUUID(), organizationId: input.organizationId, opportunityId: input.opportunityId, actorId: input.actorId, fromEmail: input.fromEmail, toEmail: input.toEmail, cc: input.cc, bcc: input.bcc, subject: input.subject, bodyHtml: input.bodyHtml, bodyText: input.bodyText, status: input.status, provider: "lark_smtp", providerMessageId: input.providerMessageId ?? null, errorCode: null, sentAt: input.sentAt ?? null };
+    await this.db.insert(opportunityEmails).values(row);
+    return { id: row.id, opportunityId: row.opportunityId, from: row.fromEmail, to: row.toEmail, cc: row.cc, bcc: row.bcc, subject: row.subject, status: row.status, provider: row.provider, providerMessageId: row.providerMessageId, createdAt: new Date().toISOString(), sentAt: row.sentAt?.toISOString() ?? null };
+  }
+
+  async insertOpportunityActivity(input: { organizationId: string; opportunityId: string; actorId: string; type: string; detail: string }) {
+    await this.db.insert(opportunityActivities).values({ id: randomUUID(), ...input });
+  }
 
   async createOpportunity(input: { organizationId: string; actorId: string; title: string; contactId: string; value: number; stageKey: OpportunityStage }) {
     return this.db.transaction(async (tx) => {
@@ -240,37 +265,36 @@ export class Repositories {
     return { opportunityId: input.opportunityId, conversationId: input.conversationId };
   }
 
-  async upsertSyncedContact(input: { organizationId: string; channelConnectionId?: string; externalId: string; name: string; email: string; phone: string; ownerId: string }) {
-    const scopedExternalId = input.channelConnectionId ? `${input.channelConnectionId}:${input.externalId}` : input.externalId; const existing = (await this.db.select().from(contacts).where(and(eq(contacts.organizationId, input.organizationId), eq(contacts.externalId, scopedExternalId))).limit(1))[0];
-    if (existing) { const updated = await this.db.update(contacts).set({ name: input.name || "Contato Chatwoot", email: input.email, phone: input.phone, updatedAt: new Date() }).where(and(eq(contacts.organizationId, input.organizationId), eq(contacts.id, existing.id))).returning(); return updated[0]; }
-    const row = await this.db.insert(contacts).values({ id: `contact-${input.organizationId}-${scopedExternalId}`, organizationId: input.organizationId, externalId: scopedExternalId, name: input.name || "Contato Chatwoot", company: "", phone: input.phone, email: input.email, ownerId: input.ownerId, notes: "Importado do Chatwoot", lastConversationAt: new Date() }).returning();
+  async upsertSyncedContact(input: { organizationId: string; externalId: string; name: string; email: string; phone: string; ownerId: string }) {
+    const row = await this.db.insert(contacts).values({ id: `contact-${input.organizationId}-${input.externalId}`, organizationId: input.organizationId, externalId: input.externalId, name: input.name || "Contato Chatwoot", company: "", phone: input.phone, email: input.email, ownerId: input.ownerId, notes: "Importado do Chatwoot", lastConversationAt: new Date() }).onConflictDoUpdate({ target: [contacts.organizationId, contacts.externalId], set: { name: input.name || "Contato Chatwoot", email: input.email, phone: input.phone, updatedAt: new Date() } }).returning();
     return row[0];
   }
-  async upsertExternalContactIdentity(input: { organizationId: string; contactId: string; channelConnectionId: string; channelType: ChannelType; providerType: ProviderType; externalContactId: string; address?: string; username?: string; phone?: string; email?: string }): Promise<ContactIdentity> {
-    const row = await this.db.insert(contactIdentities).values({ id: `identity-${input.organizationId}-${input.channelConnectionId}-${input.externalContactId}`, organizationId: input.organizationId, contactId: input.contactId, channelConnectionId: input.channelConnectionId, channelType: input.channelType, providerType: input.providerType, externalContactId: input.externalContactId, address: input.address ?? null, username: input.username ?? null, phone: input.phone ?? null, email: input.email ?? null }).onConflictDoUpdate({ target: [contactIdentities.organizationId, contactIdentities.channelConnectionId, contactIdentities.externalContactId], set: { contactId: input.contactId, channelType: input.channelType, providerType: input.providerType, address: input.address ?? null, username: input.username ?? null, phone: input.phone ?? null, email: input.email ?? null, updatedAt: new Date() } }).returning();
-    const saved = row[0]; return { id: saved.id, organizationId: saved.organizationId, contactId: saved.contactId, channelConnectionId: saved.channelConnectionId, channelType: saved.channelType as ChannelType, providerType: saved.providerType as ProviderType, externalContactId: saved.externalContactId, address: saved.address ?? undefined, username: saved.username ?? undefined, phone: saved.phone ?? undefined, email: saved.email ?? undefined };
-  }
-  async listContactIdentities(organizationId: string, contactId: string): Promise<ContactIdentity[]> { const rows = await this.db.select().from(contactIdentities).where(and(eq(contactIdentities.organizationId, organizationId), eq(contactIdentities.contactId, contactId))); return rows.map((row) => ({ id: row.id, organizationId: row.organizationId, contactId: row.contactId, channelConnectionId: row.channelConnectionId, channelType: row.channelType as ChannelType, providerType: row.providerType as ProviderType, externalContactId: row.externalContactId, address: row.address ?? undefined, username: row.username ?? undefined, phone: row.phone ?? undefined, email: row.email ?? undefined })); }
-  async upsertSyncedChannel(input: { organizationId: string; integrationAccountId: string; externalId: string; name: string; type: ChannelType; providerType: ProviderType }) {
-    const row = await this.db.insert(channels).values({ id: `channel-${input.organizationId}-${input.integrationAccountId}-${input.externalId}`, organizationId: input.organizationId, integrationAccountId: input.integrationAccountId, externalId: input.externalId, name: input.name, type: input.type, providerType: input.providerType, status: "CONNECTED", conversations: 0 }).onConflictDoUpdate({ target: [channels.organizationId, channels.integrationAccountId, channels.externalId], set: { integrationAccountId: input.integrationAccountId, name: input.name, type: input.type, providerType: input.providerType, status: "CONNECTED", updatedAt: new Date() } }).returning();
+  async upsertSyncedChannel(input: { organizationId: string; integrationAccountId: string; externalId: string; name: string; type: string }) {
+    const row = await this.db.insert(channels).values({ id: `channel-${input.organizationId}-${input.externalId}`, organizationId: input.organizationId, integrationAccountId: input.integrationAccountId, externalId: input.externalId, name: input.name, type: input.type, status: "CONNECTED", conversations: 0 }).onConflictDoUpdate({ target: [channels.organizationId, channels.externalId], set: { integrationAccountId: input.integrationAccountId, name: input.name, type: input.type, status: "CONNECTED", updatedAt: new Date() } }).returning();
     return row[0];
   }
-  async upsertSyncedConversation(input: { organizationId: string; channelConnectionId: string; channelType: ChannelType; providerType: ProviderType; externalId: string; contactId: string; channelId: string; status: string; assignedToId?: string; lastMessage: string; lastMessageAt: Date }) {
-    const existing = (await this.db.select().from(conversations).where(and(eq(conversations.organizationId, input.organizationId), eq(conversations.channelConnectionId, input.channelConnectionId), eq(conversations.externalId, input.externalId))).limit(1))[0];
-    if (existing) { await this.db.update(conversations).set({ channelConnectionId: input.channelConnectionId, channelType: input.channelType, providerType: input.providerType, contactId: input.contactId, channelId: input.channelId, status: input.status, ...(input.assignedToId ? { assignedToId: input.assignedToId } : {}), lastMessage: sql`CASE WHEN ${conversations.lastMessageAt} <= ${input.lastMessageAt.toISOString()}::timestamptz THEN ${input.lastMessage} ELSE ${conversations.lastMessage} END`, lastMessageAt: sql`GREATEST(${conversations.lastMessageAt}, ${input.lastMessageAt.toISOString()}::timestamptz)`, updatedAt: new Date() }).where(and(eq(conversations.organizationId, input.organizationId), eq(conversations.id, existing.id))); return existing.id; }
-    const row = await this.db.insert(conversations).values({ id: `conversation-${input.organizationId}-${input.channelConnectionId}-${input.externalId}`, organizationId: input.organizationId, externalId: input.externalId, channelConnectionId: input.channelConnectionId, channelType: input.channelType, providerType: input.providerType, contactId: input.contactId, channelId: input.channelId, status: input.status, assignedToId: input.assignedToId ?? null, unread: 0, lastMessage: input.lastMessage, lastMessageAt: input.lastMessageAt }).returning({ id: conversations.id });
+  async upsertSyncedConversation(input: { organizationId: string; externalId: string; contactId: string; channelId: string; departmentId?: string | null; status: string; assignedToId?: string; lastMessage: string; lastMessageAt: Date }) {
+    const existing = (await this.db.select().from(conversations).where(and(eq(conversations.organizationId, input.organizationId), eq(conversations.externalId, input.externalId))).limit(1))[0];
+    if (existing) { await this.db.update(conversations).set({ contactId: input.contactId, channelId: input.channelId, departmentId: input.departmentId ?? existing.departmentId ?? null, status: input.status, assignedToId: input.assignedToId ?? null, lastMessage: input.lastMessage, lastMessageAt: input.lastMessageAt, updatedAt: new Date() }).where(eq(conversations.id, existing.id)); return existing.id; }
+    const row = await this.db.insert(conversations).values({ id: `conversation-${input.organizationId}-${input.externalId}`, organizationId: input.organizationId, externalId: input.externalId, contactId: input.contactId, channelId: input.channelId, departmentId: input.departmentId ?? null, status: input.status, assignedToId: input.assignedToId ?? null, unread: 0, lastMessage: input.lastMessage, lastMessageAt: input.lastMessageAt }).returning({ id: conversations.id });
     return row[0].id;
   }
-  async upsertSyncedMessage(input: { organizationId: string; conversationId: string; channelConnectionId: string; channelType: ChannelType; providerType: ProviderType; externalId?: string; sender: "CONTACT" | "AGENT" | "SYSTEM"; authorName: string; body: string; createdAt: Date; internal?: boolean; messageType?: MessageType; deliveryStatus?: DeliveryStatus }) {
-    const direction = input.sender === "AGENT" ? "OUTBOUND" : "INBOUND"; const values = { id: `message-${input.organizationId}-${input.channelConnectionId}-${input.externalId ?? randomUUID()}`, organizationId: input.organizationId, conversationId: input.conversationId, channelConnectionId: input.channelConnectionId, channelType: input.channelType, providerType: input.providerType, externalId: input.externalId ?? null, direction, senderIdentity: null, recipientIdentity: null, sender: input.sender, authorName: input.authorName, body: input.body, messageType: input.messageType ?? "TEXT", deliveryStatus: input.deliveryStatus ?? (direction === "OUTBOUND" ? "SENT" : "DELIVERED"), providerCreatedAt: input.createdAt, internal: input.internal ?? false, createdAt: input.createdAt };
-    if (input.externalId) { const row = await this.db.insert(messages).values(values).onConflictDoUpdate({ target: [messages.organizationId, messages.channelConnectionId, messages.externalId], set: { body: input.body, authorName: input.authorName, sender: input.sender, direction, messageType: input.messageType ?? "TEXT", deliveryStatus: input.deliveryStatus ?? (direction === "OUTBOUND" ? "SENT" : "DELIVERED"), createdAt: input.createdAt, providerCreatedAt: input.createdAt, internal: input.internal ?? false } }).returning(); return row[0]; }
-    const row = await this.db.insert(messages).values(values).returning(); return row[0];
+  async upsertInboundConversation(input: { organizationId: string; integrationAccountId: string; externalConversationId: string; contactPhone: string; contactName: string; channelExternalId: string; channelName: string; channelType: string; lastMessage: string; lastMessageAt: Date }) {
+    const owner = await this.findAnyActiveMember(input.organizationId); if (!owner) throw new Error("OWNER_NOT_FOUND");
+    const contact = await this.upsertSyncedContact({ organizationId: input.organizationId, externalId: input.externalConversationId, name: input.contactName, email: "", phone: input.contactPhone, ownerId: owner.userId });
+    const channel = await this.upsertSyncedChannel({ organizationId: input.organizationId, integrationAccountId: input.integrationAccountId, externalId: input.channelExternalId, name: input.channelName, type: input.channelType });
+    const departmentId = await this.findRoutingDepartment(input.organizationId, channel.id, input.lastMessage);
+    return this.upsertSyncedConversation({ organizationId: input.organizationId, externalId: input.externalConversationId, contactId: contact.id, channelId: channel.id, departmentId, status: "OPEN", lastMessage: input.lastMessage, lastMessageAt: input.lastMessageAt });
+  }
+  async upsertSyncedMessage(input: { organizationId: string; conversationId: string; externalId?: string; sender: "CONTACT" | "AGENT" | "SYSTEM"; authorName: string; body: string; createdAt: Date; internal?: boolean }) {
+    if (input.externalId) { const row = await this.db.insert(messages).values({ id: `message-${input.organizationId}-${input.externalId}`, ...input, internal: input.internal ?? false }).onConflictDoUpdate({ target: [messages.organizationId, messages.externalId], set: { body: input.body, authorName: input.authorName, sender: input.sender, createdAt: input.createdAt, internal: input.internal ?? false } }).returning(); return row[0]; }
+    const row = await this.db.insert(messages).values({ id: randomUUID(), ...input, internal: input.internal ?? false }).returning(); return row[0];
   }
 
   async listIntegrations(organizationId: string) { return (await this.db.select().from(integrationAccounts).where(eq(integrationAccounts.organizationId, organizationId)).orderBy(integrationAccounts.createdAt)).map(toIntegration); }
   async getIntegration(organizationId: string, id: string) { const row = (await this.db.select().from(integrationAccounts).where(and(eq(integrationAccounts.organizationId, organizationId), eq(integrationAccounts.id, id))).limit(1))[0]; return row ? toIntegration(row) : null; }
-  async saveIntegration(input: { id: string; organizationId: string; provider: string; providerType: ProviderType; channelType: ChannelType; providerInboxId?: string | null; displayName: string; externalAccountId: string; baseUrl: string; credentialCiphertext: string; credentialIv: string; credentialTag: string; credentialVersion: number; webhookSecretCiphertext?: string | null; webhookSecretIv?: string | null; webhookSecretTag?: string | null; webhookSecretVersion?: number | null }) {
-    const row = await this.db.insert(integrationAccounts).values({ ...input, providerInboxId: input.providerInboxId ?? null, status: "CONFIGURED", metadata: {} }).onConflictDoUpdate({ target: integrationAccounts.id, set: { providerType: input.providerType, channelType: input.channelType, providerInboxId: input.providerInboxId ?? null, displayName: input.displayName, externalAccountId: input.externalAccountId, baseUrl: input.baseUrl, credentialCiphertext: input.credentialCiphertext, credentialIv: input.credentialIv, credentialTag: input.credentialTag, credentialVersion: input.credentialVersion, webhookSecretCiphertext: input.webhookSecretCiphertext ?? null, webhookSecretIv: input.webhookSecretIv ?? null, webhookSecretTag: input.webhookSecretTag ?? null, webhookSecretVersion: input.webhookSecretVersion ?? null, status: "CONFIGURED", lastErrorCode: null, lastErrorAt: null, updatedAt: new Date() } }).returning();
+  async saveIntegration(input: { id: string; organizationId: string; provider: string; displayName: string; externalAccountId: string; baseUrl: string; credentialCiphertext: string; credentialIv: string; credentialTag: string; credentialVersion: number; webhookSecretCiphertext?: string | null; webhookSecretIv?: string | null; webhookSecretTag?: string | null; webhookSecretVersion?: number | null }) {
+    const row = await this.db.insert(integrationAccounts).values({ ...input, status: "UNVERIFIED", metadata: {} }).onConflictDoUpdate({ target: integrationAccounts.id, set: { displayName: input.displayName, externalAccountId: input.externalAccountId, baseUrl: input.baseUrl, credentialCiphertext: input.credentialCiphertext, credentialIv: input.credentialIv, credentialTag: input.credentialTag, credentialVersion: input.credentialVersion, webhookSecretCiphertext: input.webhookSecretCiphertext ?? null, webhookSecretIv: input.webhookSecretIv ?? null, webhookSecretTag: input.webhookSecretTag ?? null, webhookSecretVersion: input.webhookSecretVersion ?? null, status: "UNVERIFIED", lastErrorCode: null, updatedAt: new Date() } }).returning();
     return toIntegration(row[0]);
   }
   async updateIntegration(organizationId: string, id: string, input: Record<string, unknown>) { await this.db.update(integrationAccounts).set(input).where(and(eq(integrationAccounts.organizationId, organizationId), eq(integrationAccounts.id, id))); return this.getIntegration(organizationId, id); }
@@ -301,7 +325,7 @@ export class Repositories {
     const row = (await this.db.select().from(integrationAccounts).where(and(eq(integrationAccounts.provider, provider), eq(integrationAccounts.externalAccountId, externalAccountId), inArray(integrationAccounts.status, ["ACTIVE", "CONNECTED"]))).limit(1))[0];
     return row ? toIntegration(row) : null;
   }
-  async findIntegrationsByExternalAccountId(externalAccountId: string): Promise<IntegrationRecord[]> { const rows = await this.db.select().from(integrationAccounts).where(and(eq(integrationAccounts.provider, "chatwoot"), eq(integrationAccounts.externalAccountId, externalAccountId), inArray(integrationAccounts.status, ["ACTIVE", "CONNECTED", "DEGRADED"]))); return rows.map(toIntegration); }
+  async findIntegrationByExternalAccountId(externalAccountId: string) { const row = (await this.db.select().from(integrationAccounts).where(and(eq(integrationAccounts.externalAccountId, externalAccountId), inArray(integrationAccounts.status, ["ACTIVE", "CONNECTED"]))).limit(1))[0]; return row ? toIntegration(row) : null; }
 
   async claimWebhookEvent(input: { organizationId: string; integrationAccountId: string; provider: string; externalEventId: string; payloadHash: string }): Promise<boolean> {
     const inserted = await this.db.insert(webhookEvents).values({ id: randomUUID(), ...input }).onConflictDoNothing({ target: [webhookEvents.integrationAccountId, webhookEvents.externalEventId] }).returning({ id: webhookEvents.id });
@@ -309,36 +333,16 @@ export class Repositories {
   }
 
   async completeWebhookEvent(integrationAccountId: string, externalEventId: string): Promise<void> { await this.db.update(webhookEvents).set({ processedAt: new Date() }).where(and(eq(webhookEvents.integrationAccountId, integrationAccountId), eq(webhookEvents.externalEventId, externalEventId))); }
-  async releaseWebhookEvent(organizationId: string, integrationAccountId: string, externalEventId: string): Promise<void> { await this.db.delete(webhookEvents).where(and(eq(webhookEvents.organizationId, organizationId), eq(webhookEvents.integrationAccountId, integrationAccountId), eq(webhookEvents.externalEventId, externalEventId), isNull(webhookEvents.processedAt))); }
-  async getWebhookActivity(organizationId: string, integrationAccountId: string) {
-    const scope = and(eq(webhookEvents.organizationId, organizationId), eq(webhookEvents.integrationAccountId, integrationAccountId));
-    const [received, processed] = await Promise.all([
-      this.db.select({ receivedAt: webhookEvents.receivedAt }).from(webhookEvents).where(scope).orderBy(desc(webhookEvents.receivedAt)).limit(1),
-      this.db.select({ processedAt: webhookEvents.processedAt }).from(webhookEvents).where(and(scope, sql`${webhookEvents.processedAt} IS NOT NULL`)).orderBy(desc(webhookEvents.processedAt)).limit(1),
-    ]);
-    return { lastReceivedAt: received[0]?.receivedAt ? iso(received[0].receivedAt) : null, lastProcessedAt: processed[0]?.processedAt ? iso(processed[0].processedAt) : null };
-  }
 
-  async findConversationByExternalId(organizationId: string, externalId: string, channelConnectionId?: string) { return (await this.db.select().from(conversations).where(and(eq(conversations.organizationId, organizationId), ...(channelConnectionId ? [eq(conversations.channelConnectionId, channelConnectionId)] : []), eq(conversations.externalId, externalId))).limit(1))[0] ?? null; }
-  async findMessageByExternalId(organizationId: string, externalId: string, channelConnectionId?: string) { return (await this.db.select().from(messages).where(and(eq(messages.organizationId, organizationId), ...(channelConnectionId ? [eq(messages.channelConnectionId, channelConnectionId)] : []), eq(messages.externalId, externalId))).limit(1))[0] ?? null; }
-  async insertInboundMessage(input: { organizationId: string; conversationId: string; channelConnectionId?: string; channelType?: ChannelType; providerType?: ProviderType; externalId?: string; body: string; authorName: string; createdAt: Date; messageType?: MessageType; deliveryStatus?: DeliveryStatus }) {
+  async findConversationByExternalId(organizationId: string, externalId: string) { return (await this.db.select().from(conversations).where(and(eq(conversations.organizationId, organizationId), eq(conversations.externalId, externalId))).limit(1))[0] ?? null; }
+  async findMessageByExternalId(organizationId: string, externalId: string) { return (await this.db.select().from(messages).where(and(eq(messages.organizationId, organizationId), eq(messages.externalId, externalId))).limit(1))[0] ?? null; }
+  async insertInboundMessage(input: { organizationId: string; conversationId: string; externalId?: string; body: string; authorName: string; createdAt: Date }) {
     return this.db.transaction(async (tx) => {
-      const row = { id: randomUUID(), organizationId: input.organizationId, conversationId: input.conversationId, channelConnectionId: input.channelConnectionId ?? null, channelType: input.channelType ?? null, providerType: input.providerType ?? null, externalId: input.externalId ?? null, idempotencyKey: null, direction: "INBOUND", senderIdentity: null, recipientIdentity: null, sender: "CONTACT", authorName: input.authorName, body: input.body, messageType: input.messageType ?? "TEXT", deliveryStatus: input.deliveryStatus ?? "DELIVERED", providerCreatedAt: input.createdAt, internal: false, createdAt: input.createdAt };
-      const inserted = await tx.insert(messages).values(row).onConflictDoNothing().returning();
-      if (!inserted.length) {
-        if (input.externalId) {
-          const existing = (await tx.select().from(messages).where(and(eq(messages.organizationId, input.organizationId), ...(input.channelConnectionId ? [eq(messages.channelConnectionId, input.channelConnectionId)] : []), eq(messages.externalId, input.externalId))).limit(1))[0];
-          if (existing) return { message: toMessage(existing), created: false };
-        }
-        throw new Error("INBOUND_MESSAGE_CONFLICT");
-      }
-      await tx.update(conversations).set({
-        lastMessage: sql`CASE WHEN ${conversations.lastMessageAt} <= ${input.createdAt.toISOString()}::timestamptz THEN ${input.body} ELSE ${conversations.lastMessage} END`,
-        lastMessageAt: sql`GREATEST(${conversations.lastMessageAt}, ${input.createdAt.toISOString()}::timestamptz)`,
-        unread: sql`${conversations.unread} + 1`,
-        updatedAt: new Date(),
-      }).where(and(eq(conversations.organizationId, input.organizationId), eq(conversations.id, input.conversationId)));
-      return { message: toMessage(inserted[0]), created: true };
+      if (input.externalId) { const existing = await tx.select().from(messages).where(and(eq(messages.organizationId, input.organizationId), eq(messages.externalId, input.externalId))).limit(1); if (existing.length) return toMessage(existing[0]); }
+      const row = { id: randomUUID(), organizationId: input.organizationId, conversationId: input.conversationId, externalId: input.externalId ?? null, sender: "CONTACT", authorName: input.authorName, body: input.body, internal: false, createdAt: input.createdAt };
+      await tx.insert(messages).values(row);
+      await tx.update(conversations).set({ lastMessage: input.body, lastMessageAt: input.createdAt, updatedAt: new Date() }).where(and(eq(conversations.organizationId, input.organizationId), eq(conversations.id, input.conversationId)));
+      return toMessage(row);
     });
   }
 }

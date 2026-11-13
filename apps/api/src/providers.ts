@@ -1,15 +1,11 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import type { ChannelType, Contact, Conversation, Message, MessageType, MessagingProvider, NormalizedOutgoingMessage, NormalizedWebhookEvent, ProviderCapabilities, ProviderContext, ProviderType, SupportedChannelType } from "@echat/shared";
+import type { ChannelType, Contact, Conversation, Message, MessagingProvider, NormalizedOutgoingMessage, NormalizedWebhookEvent, ProviderCapabilities, ProviderContext, ProviderType } from "@echat/shared";
 
-export type ProviderErrorCode = "AUTHENTICATION_ERROR" | "FORBIDDEN" | "RATE_LIMITED" | "TIMEOUT" | "PROVIDER_UNAVAILABLE" | "INVALID_RESPONSE" | "UNSUPPORTED_CHANNEL" | "CONFIGURATION_ERROR" | "PROVIDER_ERROR";
-export class ProviderError extends Error {
-  constructor(public readonly code: ProviderErrorCode, message: string, public readonly status?: number) { super(message); this.name = "ProviderError"; }
-}
 export type ChatwootProviderConfig = { baseUrl: string; token: string; accountId: string; inboxId?: string; channelType?: ChannelType; webhookSecret?: string };
-export type SyncContact = { externalId: string; name: string; email: string; phone: string; company: string; address?: string; username?: string };
-export type SyncConversation = { externalId: string; contactExternalId: string; channelExternalId: string; channelName: string; channelType: SupportedChannelType; status: "OPEN" | "WAITING" | "RESOLVED"; assignedToExternalId?: string; lastMessage: string; lastMessageAt: string; messages: SyncMessage[] };
-export type SyncMessage = { externalId?: string; sender: "CONTACT" | "AGENT" | "SYSTEM"; authorName: string; body: string; createdAt: string; internal?: boolean; messageType?: MessageType; deliveryStatus?: "PENDING" | "SENT" | "DELIVERED" | "READ" | "FAILED" };
+export type SyncContact = { externalId: string; name: string; email: string; phone: string; company: string };
+export type SyncConversation = { externalId: string; contactExternalId: string; channelExternalId: string; channelName: string; channelType: "WHATSAPP" | "WEBCHAT" | "EMAIL" | "INSTAGRAM"; status: "OPEN" | "WAITING" | "RESOLVED"; assignedToExternalId?: string; lastMessage: string; lastMessageAt: string; messages: SyncMessage[] };
+export type SyncMessage = { externalId?: string; sender: "CONTACT" | "AGENT" | "SYSTEM"; authorName: string; body: string; createdAt: string; internal?: boolean; messageType?: "TEXT" | "IMAGE" | "VIDEO" | "AUDIO" | "FILE"; deliveryStatus?: "PENDING" | "SENT" | "DELIVERED" | "READ" | "FAILED" };
 export interface IntegrationMessagingProvider extends MessagingProvider {
   testConnection(): Promise<{ accountId: string; name?: string }>;
   listInboxes?(): Promise<Array<{ id: string; name: string; channelType?: string }>>;
@@ -21,7 +17,6 @@ export interface IntegrationMessagingProvider extends MessagingProvider {
 }
 
 const messageResponseSchema = z.object({ id: z.union([z.string(), z.number()]), content: z.string(), created_at: z.union([z.string(), z.number()]).optional(), message_type: z.union([z.string(), z.number()]).optional() });
-const accountResponseSchema = z.object({ id: z.union([z.string(), z.number()]), name: z.string().optional() });
 const webhookIdentitySchema = z.object({ id: z.union([z.string(), z.number()]).nullish(), name: z.string().nullish(), email: z.string().nullish(), phone_number: z.string().nullish() }).nullish();
 const webhookInboxSchema = z.object({ id: z.union([z.string(), z.number()]).nullish(), name: z.string().nullish(), channel_type: z.string().nullish() }).nullish();
 const webhookSchema = z.object({
@@ -53,7 +48,7 @@ export class MockMessagingProvider implements MessagingProvider {
     const externalAccountId = normalizeExternal(parsed.account?.id ?? parsed.account_id ?? "mock"); const externalConversationId = normalizeExternal(parsed.conversation?.id ?? parsed.conversation_id ?? "");
     const body = parsed.content ?? parsed.message?.content ?? ""; if (!externalConversationId || !body) return [];
     const messageType = String(parsed.message?.message_type ?? "incoming");
-    return [{ externalEventId: normalizeExternal(parsed.id ?? `${externalConversationId}:${body}`), externalAccountId, externalConversationId, externalMessageId: parsed.message?.id === undefined ? undefined : normalizeExternal(parsed.message.id), providerType: "MOCK", messageType: "TEXT", direction: messageType === "outgoing" ? "OUTBOUND" : "INBOUND", body, createdAt: new Date().toISOString(), sender: messageType === "outgoing" ? "AGENT" : "CONTACT", authorName: parsed.message?.sender?.name ?? parsed.sender?.name ?? parsed.conversation?.contact?.name ?? "Chatwoot" }];
+    return [{ externalEventId: normalizeExternal(parsed.id ?? `${externalConversationId}:${body}`), externalAccountId, externalConversationId, externalMessageId: parsed.message?.id === undefined ? undefined : normalizeExternal(parsed.message.id), body, createdAt: new Date().toISOString(), sender: messageType === "outgoing" ? "AGENT" : "CONTACT", authorName: parsed.message?.sender?.name ?? parsed.sender?.name ?? parsed.conversation?.contact?.name ?? "Chatwoot" }];
   }
 }
 
@@ -70,52 +65,50 @@ export class ChatwootProvider implements MessagingProvider {
   capabilities(_context: ProviderContext): ProviderCapabilities { return { SEND_TEXT: true, SEND_MEDIA: false, RECEIVE_MEDIA: false, DELIVERY_STATUS: false, READ_STATUS: false, THREADING: true, TEMPLATES: false }; }
 
   private async request(path: string, init: RequestInit = {}): Promise<any> {
-    if (!this.baseUrl || !this.token || !this.accountId) throw new ProviderError("CONFIGURATION_ERROR", "Chatwoot não configurado");
+    if (!this.baseUrl || !this.token || !this.accountId) throw new Error("Chatwoot não configurado");
     const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 10_000);
     try {
       const response = await fetch(`${this.baseUrl}${path}`, { ...init, headers: { "Content-Type": "application/json", api_access_token: this.token, ...(init.headers ?? {}) }, signal: controller.signal });
       const body = await response.json().catch(() => undefined);
-      if (!response.ok) {
-        const code: ProviderErrorCode = response.status === 401 ? "AUTHENTICATION_ERROR" : response.status === 403 ? "FORBIDDEN" : response.status === 429 ? "RATE_LIMITED" : response.status >= 500 ? "PROVIDER_UNAVAILABLE" : "PROVIDER_ERROR";
-        throw new ProviderError(code, `Chatwoot respondeu HTTP ${response.status}`, response.status);
-      }
+      if (!response.ok) throw Object.assign(new Error(`Chatwoot respondeu HTTP ${response.status}`), { status: response.status });
       return body;
-    } catch (error) { if (error instanceof Error && error.name === "AbortError") throw new ProviderError("TIMEOUT", "Timeout ao consultar Chatwoot"); throw error; } finally { clearTimeout(timeout); }
+    } catch (error) { if (error instanceof Error && error.name === "AbortError") throw new Error("Timeout ao consultar Chatwoot"); throw error; } finally { clearTimeout(timeout); }
   }
 
-  async testConnection() { try { const account = accountResponseSchema.parse(await this.request(`/api/v1/accounts/${encodeURIComponent(this.accountId)}`)); return { accountId: normalizeExternal(account.id), name: account.name }; } catch (error) { if (error instanceof ProviderError) throw error; throw new ProviderError("INVALID_RESPONSE", "Resposta inválida do Chatwoot"); } }
+  async testConnection() { const account = await this.request(`/api/v1/accounts/${encodeURIComponent(this.accountId)}`); return { accountId: String(account?.id ?? this.accountId), name: typeof account?.name === "string" ? account.name : undefined }; }
 
-  async listContacts(page: number) { const body = await this.request(`/api/v1/accounts/${encodeURIComponent(this.accountId)}/contacts?page=${page}`); if (!Array.isArray(body?.payload)) throw new ProviderError("INVALID_RESPONSE", "Resposta inválida do Chatwoot"); const payload = body.payload; return { items: payload.map((item: any) => ({ externalId: String(item.id ?? item.identifier), name: String(item.name ?? "Contato Chatwoot"), email: String(item.email ?? ""), phone: String(item.phone_number ?? ""), company: String(item.company?.name ?? ""), address: typeof item.identifier === "string" ? item.identifier : undefined })), hasNextPage: Number(body?.meta?.current_page ?? page) < Math.ceil(Number(body?.meta?.count ?? payload.length) / 15) }; }
+  async listContacts(page: number) { const body = await this.request(`/api/v1/accounts/${encodeURIComponent(this.accountId)}/contacts?page=${page}`); const payload = Array.isArray(body?.payload) ? body.payload : []; return { items: payload.map((item: any) => ({ externalId: String(item.id ?? item.identifier), name: String(item.name ?? "Contato Chatwoot"), email: String(item.email ?? ""), phone: String(item.phone_number ?? ""), company: String(item.company?.name ?? "") })), hasNextPage: Number(body?.meta?.current_page ?? page) < Math.ceil(Number(body?.meta?.count ?? payload.length) / 15) }; }
 
-  async listInboxes() { const body = await this.request(`/api/v1/accounts/${encodeURIComponent(this.accountId)}/inboxes`); if (!Array.isArray(body?.payload)) throw new ProviderError("INVALID_RESPONSE", "Resposta inválida do Chatwoot"); return body.payload.map((item: any) => ({ id: String(item.id), name: String(item.name ?? "Inbox Chatwoot"), channelType: typeof item.channel_type === "string" ? item.channel_type : undefined })); }
+  async listInboxes() { const body = await this.request(`/api/v1/accounts/${encodeURIComponent(this.accountId)}/inboxes`); const payload = Array.isArray(body?.payload) ? body.payload : []; return payload.map((item: any) => ({ id: String(item.id), name: String(item.name ?? "Inbox Chatwoot"), channelType: typeof item.channel_type === "string" ? item.channel_type : undefined })); }
 
-  async listConversations(page: number) { const inboxFilter = this.inboxId ? `&inbox_id=${encodeURIComponent(this.inboxId)}` : ""; const body = await this.request(`/api/v1/accounts/${encodeURIComponent(this.accountId)}/conversations?status=all&page=${page}${inboxFilter}`); const payload = Array.isArray(body?.data?.payload) ? body.data.payload : Array.isArray(body?.payload) ? body.payload : undefined; if (!payload) throw new ProviderError("INVALID_RESPONSE", "Resposta inválida do Chatwoot"); return { items: payload.map((item: any) => ({ externalId: String(item.id), contactExternalId: String(item.meta?.sender?.id ?? item.contact?.id ?? item.meta?.sender?.identifier ?? `conversation-${item.id}`), channelExternalId: String(item.inbox_id ?? item.meta?.channel ?? "chatwoot"), channelName: String(item.inbox?.name ?? item.meta?.channel ?? "Chatwoot"), channelType: this.channelType(item.meta?.channel ?? item.inbox?.channel_type), status: this.conversationStatus(item.status), assignedToExternalId: item.assignee?.id ? String(item.assignee.id) : undefined, lastMessage: String(item.last_non_activity_message?.content ?? item.last_message?.content ?? ""), lastMessageAt: isoFromExternal(item.last_activity_at ?? item.timestamp), messages: [] })), hasNextPage: payload.length > 0 }; }
+  async listWebhooks() { const body = await this.request(`/api/v1/accounts/${encodeURIComponent(this.accountId)}/webhooks`); const payload = Array.isArray(body?.payload) ? body.payload : Array.isArray(body?.payload?.webhooks) ? body.payload.webhooks : Array.isArray(body?.webhooks) ? body.webhooks : Array.isArray(body) ? body : []; return payload.map((item: any) => ({ id: String(item.id), url: String(item.url ?? ""), secret: typeof item.secret === "string" ? item.secret : undefined, subscriptions: Array.isArray(item.subscriptions) ? item.subscriptions.map(String) : [] })); }
 
-  private channelType(value: unknown): SupportedChannelType { const text = String(value ?? "").toLowerCase(); if (text.includes("whatsapp")) return "WHATSAPP"; if (text.includes("webwidget") || text.includes("web_widget")) return "WEBCHAT"; if (text.includes("instagram")) return "INSTAGRAM"; if (text.includes("email")) return "EMAIL"; throw new ProviderError("UNSUPPORTED_CHANNEL", `Canal Chatwoot não suportado: ${text || "desconhecido"}`); }
+  async listConversations(page: number) { const inboxFilter = this.inboxId ? `&inbox_id=${encodeURIComponent(this.inboxId)}` : ""; const body = await this.request(`/api/v1/accounts/${encodeURIComponent(this.accountId)}/conversations?status=all&sort=-last_activity_at&page=${page}${inboxFilter}`); const payload = Array.isArray(body?.data?.payload) ? body.data.payload : Array.isArray(body?.payload) ? body.payload : []; return { items: payload.map((item: any) => ({ externalId: String(item.id), contactExternalId: String(item.meta?.sender?.id ?? item.contact?.id ?? item.meta?.sender?.identifier ?? `conversation-${item.id}`), channelExternalId: String(item.meta?.channel ?? item.inbox_id ?? "chatwoot"), channelName: String(item.inbox?.name ?? item.meta?.channel ?? "Chatwoot"), channelType: this.channelType(item.meta?.channel ?? item.inbox?.channel_type ?? this.channelTypeHint), status: this.conversationStatus(item.status), assignedToExternalId: item.assignee?.id ? String(item.assignee.id) : undefined, lastMessage: String(item.last_non_activity_message?.content ?? item.last_message?.content ?? ""), lastMessageAt: new Date(Number(item.last_activity_at ?? Date.now()) * (Number(item.last_activity_at ?? 0) < 10_000_000_000 ? 1000 : 1)).toISOString(), messages: [] })), hasNextPage: payload.length >= 25 }; }
+
+  private channelType(value: unknown): "WHATSAPP" | "WEBCHAT" | "EMAIL" | "INSTAGRAM" { const text = String(value ?? "").toLowerCase(); return text.includes("whatsapp") ? "WHATSAPP" : text.includes("email") ? "EMAIL" : text.includes("instagram") ? "INSTAGRAM" : "WEBCHAT"; }
   private conversationStatus(value: unknown): "OPEN" | "WAITING" | "RESOLVED" { const text = String(value ?? "open").toLowerCase(); return text === "resolved" ? "RESOLVED" : text === "pending" || text === "snoozed" ? "WAITING" : "OPEN"; }
 
-  async getConversationDetails(externalId: string) { const body = await this.request(`/api/v1/accounts/${encodeURIComponent(this.accountId)}/conversations/${encodeURIComponent(externalId)}`); if (!body || !Array.isArray(body.messages)) throw new ProviderError("INVALID_RESPONSE", "Resposta inválida do Chatwoot"); const messages = body.messages; return { externalId: String(body?.id ?? externalId), contactExternalId: String(body?.meta?.sender?.id ?? body?.contact?.id ?? `conversation-${externalId}`), channelExternalId: String(body?.inbox_id ?? body?.meta?.channel ?? "chatwoot"), channelName: String(body?.inbox?.name ?? body?.meta?.channel ?? "Chatwoot"), channelType: this.channelType(body?.meta?.channel ?? body?.inbox?.channel_type), status: this.conversationStatus(body?.status), assignedToExternalId: body?.assignee?.id ? String(body.assignee.id) : undefined, lastMessage: String(body?.last_non_activity_message?.content ?? ""), lastMessageAt: isoFromExternal(body?.last_activity_at ?? body?.timestamp), messages: messages.map((message: any) => ({ externalId: message.id === undefined ? undefined : String(message.id), sender: isOutgoingMessage(message.message_type) ? "AGENT" : "CONTACT", authorName: String(message.sender?.name ?? "Chatwoot"), body: String(message.content ?? ""), createdAt: isoFromExternal(message.created_at), internal: Boolean(message.private), messageType: "TEXT", deliveryStatus: isOutgoingMessage(message.message_type) ? "SENT" : "DELIVERED" })) } satisfies SyncConversation; }
+  async getConversationDetails(externalId: string) { const body = await this.request(`/api/v1/accounts/${encodeURIComponent(this.accountId)}/conversations/${encodeURIComponent(externalId)}`); const messages = Array.isArray(body?.messages) ? body.messages : []; return { externalId: String(body?.id ?? externalId), contactExternalId: String(body?.meta?.sender?.id ?? body?.contact?.id ?? `conversation-${externalId}`), channelExternalId: String(body?.meta?.channel ?? body?.inbox_id ?? "chatwoot"), channelName: String(body?.inbox?.name ?? body?.meta?.channel ?? "Chatwoot"), channelType: this.channelType(body?.meta?.channel ?? body?.inbox?.channel_type ?? this.channelTypeHint), status: this.conversationStatus(body?.status), assignedToExternalId: body?.assignee?.id ? String(body.assignee.id) : undefined, lastMessage: String(body?.last_non_activity_message?.content ?? ""), lastMessageAt: new Date(Number(body?.last_activity_at ?? Date.now()) * (Number(body?.last_activity_at ?? 0) < 10_000_000_000 ? 1000 : 1)).toISOString(), messages: messages.map((message: any) => ({ externalId: message.id === undefined ? undefined : String(message.id), sender: String(message.message_type) === "outgoing" ? "AGENT" : "CONTACT", authorName: String(message.sender?.name ?? "Chatwoot"), body: String(message.content ?? ""), createdAt: new Date(Number(message.created_at ?? Date.now()) * (Number(message.created_at ?? 0) < 10_000_000_000 ? 1000 : 1)).toISOString(), internal: Boolean(message.private), messageType: "TEXT" as const, deliveryStatus: String(message.message_type) === "outgoing" ? "SENT" as const : "DELIVERED" as const })) } satisfies SyncConversation; }
   async listConversationsWithMessages(page: number) { const result = await this.listConversations(page); const items = []; for (const conversation of result.items) items.push(await this.getConversationDetails(conversation.externalId)); return { items, hasNextPage: result.hasNextPage }; }
-  async listWebhooks() { const body = await this.request(`/api/v1/accounts/${encodeURIComponent(this.accountId)}/webhooks`); const payload = Array.isArray(body?.payload) ? body.payload : Array.isArray(body?.payload?.webhooks) ? body.payload.webhooks : Array.isArray(body?.webhooks) ? body.webhooks : Array.isArray(body) ? body : undefined; if (!payload) throw new ProviderError("INVALID_RESPONSE", "Resposta inválida do Chatwoot"); return payload.map((item: any) => ({ id: String(item.id), url: String(item.url ?? ""), secret: typeof item.secret === "string" ? item.secret : undefined, subscriptions: Array.isArray(item.subscriptions) ? item.subscriptions.map(String) : [] })); }
-  async registerWebhook(url: string) { const body = await this.request(`/api/v1/accounts/${encodeURIComponent(this.accountId)}/webhooks`, { method: "POST", body: JSON.stringify({ name: "eChat", url, subscriptions: ["message_created"] }) }); const webhook = body?.payload?.webhook ?? body?.webhook ?? body; const id = webhook?.id; if (id === undefined || id === null || String(id).length === 0) throw new ProviderError("INVALID_RESPONSE", "Resposta inválida do Chatwoot"); return { id: String(id), secret: typeof webhook?.secret === "string" ? webhook.secret : undefined }; }
+  async registerWebhook(url: string) { const body = await this.request(`/api/v1/accounts/${encodeURIComponent(this.accountId)}/webhooks`, { method: "POST", body: JSON.stringify({ name: "eChat", url, subscriptions: ["message_created"] }) }); return { id: String(body?.id ?? body?.webhook?.id ?? "registered") }; }
 
   async sendMessage(input: { conversationId: string; externalConversationId?: string; body: string; internal?: boolean }): Promise<NormalizedOutgoingMessage> {
-    if (!this.baseUrl || !this.token || !this.accountId || !input.externalConversationId) throw new ProviderError("CONFIGURATION_ERROR", "Chatwoot não configurado para enviar mensagens");
+    if (!this.baseUrl || !this.token || !this.accountId || !input.externalConversationId) throw new Error("Chatwoot não configurado para enviar mensagens");
     const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 10_000);
     try {
       const response = await fetch(`${this.baseUrl}/api/v1/accounts/${encodeURIComponent(this.accountId)}/conversations/${encodeURIComponent(input.externalConversationId)}/messages`, { method: "POST", headers: { "Content-Type": "application/json", api_access_token: this.token }, body: JSON.stringify({ content: input.body, message_type: "outgoing", private: input.internal ?? false }), signal: controller.signal });
       const raw: unknown = await response.json().catch(() => undefined);
-      if (!response.ok) { const code: ProviderErrorCode = response.status === 401 ? "AUTHENTICATION_ERROR" : response.status === 403 ? "FORBIDDEN" : response.status === 429 ? "RATE_LIMITED" : response.status >= 500 ? "PROVIDER_UNAVAILABLE" : "PROVIDER_ERROR"; throw new ProviderError(code, `Chatwoot respondeu HTTP ${response.status}`, response.status); }
+      if (!response.ok) throw new Error(`Chatwoot respondeu HTTP ${response.status}`);
       const parsed = messageResponseSchema.parse(raw);
       return { externalId: normalizeExternal(parsed.id), body: parsed.content, createdAt: isoFromExternal(parsed.created_at), sender: "AGENT", authorName: "", internal: input.internal };
-    } catch (error) { if (error instanceof Error && error.name === "AbortError") throw new ProviderError("TIMEOUT", "Timeout ao enviar mensagem para Chatwoot"); if (error instanceof z.ZodError) throw new ProviderError("INVALID_RESPONSE", "Resposta inválida do Chatwoot"); if (error instanceof ProviderError) throw new ProviderError(error.code, error.message.replace(this.token, "[redacted]"), error.status); throw error instanceof Error ? new ProviderError("PROVIDER_ERROR", error.message.replace(this.token, "[redacted]")) : new ProviderError("PROVIDER_ERROR", "Falha ao enviar mensagem para Chatwoot"); } finally { clearTimeout(timeout); }
+    } catch (error) { if (error instanceof Error && error.name === "AbortError") throw new Error("Timeout ao enviar mensagem para Chatwoot"); if (error instanceof z.ZodError) throw new Error("Resposta inválida do Chatwoot"); throw error instanceof Error ? new Error(error.message.replace(this.token, "[redacted]")) : new Error("Falha ao enviar mensagem para Chatwoot"); } finally { clearTimeout(timeout); }
   }
 
   normalizeConversation(input: unknown): Conversation { return conversationSchema.parse(input); }
   normalizeMessage(input: unknown): Message { return messageSchema.parse(input); }
   normalizeContact(input: unknown): Contact { return contactSchema.parse(input); }
   verifyWebhook(headers: Record<string, string | undefined>, rawBody: string): boolean {
-    const secret = this.webhookSecret; const timestamp = headers["x-chatwoot-timestamp"]; const signature = headers["x-chatwoot-signature"];
+    const secret = this.webhookSecret ?? process.env.CHATWOOT_WEBHOOK_SECRET; const timestamp = headers["x-chatwoot-timestamp"]; const signature = headers["x-chatwoot-signature"];
     if (!secret || !timestamp || !signature?.startsWith("sha256=")) return false;
     const timestampSeconds = Number(timestamp); if (!Number.isFinite(timestampSeconds) || Math.abs(Date.now() / 1000 - timestampSeconds) > 300) return false;
     const expected = `sha256=${createHmac("sha256", secret).update(`${timestamp}.${rawBody}`).digest("hex")}`; return expected.length === signature.length && timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
@@ -137,4 +130,67 @@ export class ChatwootProvider implements MessagingProvider {
   }
 }
 
-export const createMessagingProvider = (): MessagingProvider => process.env.MESSAGING_PROVIDER === "chatwoot" ? new ChatwootProvider() : new MockMessagingProvider();
+export type MetaWhatsAppProviderConfig = { baseUrl: string; accessToken: string; phoneNumberId: string; appSecret?: string };
+
+export class MetaWhatsAppProvider implements MessagingProvider {
+  readonly name = "meta_whatsapp";
+  private readonly baseUrl: string;
+  private readonly accessToken: string;
+  private readonly phoneNumberId: string;
+  private readonly appSecret?: string;
+
+  constructor(config: MetaWhatsAppProviderConfig) {
+    this.baseUrl = config.baseUrl.replace(/\/$/, ""); this.accessToken = config.accessToken; this.phoneNumberId = config.phoneNumberId; this.appSecret = config.appSecret;
+  }
+
+  private async request(path: string, init: RequestInit = {}): Promise<any> {
+    if (!this.baseUrl || !this.accessToken || !this.phoneNumberId) throw new Error("WhatsApp Cloud API não configurada");
+    const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const response = await fetch(`${this.baseUrl}${path}`, { ...init, headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.accessToken}`, ...(init.headers ?? {}) }, signal: controller.signal });
+      const body = await response.json().catch(() => undefined);
+      if (!response.ok) throw Object.assign(new Error(`WhatsApp Cloud API respondeu HTTP ${response.status}`), { status: response.status });
+      return body;
+    } catch (error) { if (error instanceof Error && error.name === "AbortError") throw new Error("Timeout ao consultar WhatsApp Cloud API"); throw error; } finally { clearTimeout(timeout); }
+  }
+
+  async testConnection() {
+    const body = await this.request(`/${encodeURIComponent(this.phoneNumberId)}?fields=display_phone_number,verified_name,quality_rating`);
+    return { accountId: String(body?.id ?? this.phoneNumberId), name: typeof body?.verified_name === "string" ? body.verified_name : typeof body?.display_phone_number === "string" ? body.display_phone_number : undefined };
+  }
+
+  async sendMessage(input: { conversationId: string; externalConversationId?: string; recipientPhone?: string; body: string; internal?: boolean }): Promise<NormalizedOutgoingMessage> {
+    if (input.internal) return { body: input.body, createdAt: new Date().toISOString(), sender: "AGENT", authorName: "", internal: true };
+    const recipient = (input.recipientPhone ?? input.externalConversationId ?? "").replace(/\D/g, ""); if (!recipient) throw new Error("Contato sem telefone para envio no WhatsApp");
+    const body = await this.request(`/${encodeURIComponent(this.phoneNumberId)}/messages`, { method: "POST", body: JSON.stringify({ messaging_product: "whatsapp", recipient_type: "individual", to: recipient, type: "text", text: { preview_url: false, body: input.body } }) });
+    const externalId = body?.messages?.[0]?.id; if (typeof externalId !== "string") throw new Error("Resposta inválida do WhatsApp Cloud API");
+    return { externalId, body: input.body, createdAt: new Date().toISOString(), sender: "AGENT", authorName: "" };
+  }
+
+  normalizeConversation(input: unknown): Conversation { return conversationSchema.parse(input); }
+  normalizeMessage(input: unknown): Message { return messageSchema.parse(input); }
+  normalizeContact(input: unknown): Contact { return contactSchema.parse(input); }
+
+  verifyWebhook(headers: Record<string, string | undefined>, rawBody: string): boolean {
+    const signature = headers["x-hub-signature-256"]; if (!this.appSecret || !signature?.startsWith("sha256=")) return false;
+    const expected = `sha256=${createHmac("sha256", this.appSecret).update(rawBody).digest("hex")}`; return expected.length === signature.length && timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+  }
+
+  normalizeWebhook(input: unknown): NormalizedWebhookEvent[] {
+    if (!input || typeof input !== "object") return []; const root = input as { entry?: unknown[] }; const events: NormalizedWebhookEvent[] = [];
+    for (const entry of root.entry ?? []) {
+      if (!entry || typeof entry !== "object") continue; const changes = (entry as { changes?: unknown[] }).changes ?? [];
+      for (const change of changes) {
+        if (!change || typeof change !== "object") continue; const value = (change as { value?: any }).value; if (!value || typeof value !== "object") continue;
+        const phoneNumberId = typeof value.metadata?.phone_number_id === "string" ? value.metadata.phone_number_id : this.phoneNumberId; const contactName = typeof value.contacts?.[0]?.profile?.name === "string" ? value.contacts[0].profile.name : "Contato WhatsApp";
+        for (const message of Array.isArray(value.messages) ? value.messages : []) {
+          if (!message || typeof message !== "object" || typeof message.id !== "string" || typeof message.from !== "string") continue; const body = message.type === "text" && typeof message.text?.body === "string" ? message.text.body : ""; if (!body) continue;
+          events.push({ externalEventId: message.id, externalAccountId: phoneNumberId, externalConversationId: `meta:${message.from}`, externalMessageId: message.id, body, createdAt: isoFromExternal(message.timestamp), sender: "CONTACT", authorName: contactName, contactPhone: message.from, channelExternalId: phoneNumberId, channelName: "WhatsApp Cloud API", channelType: "WHATSAPP" });
+        }
+      }
+    }
+    return events;
+  }
+}
+
+export const createMessagingProvider = (): MessagingProvider => process.env.MESSAGING_PROVIDER === "chatwoot" ? new ChatwootProvider() : process.env.MESSAGING_PROVIDER === "meta_whatsapp" ? new MetaWhatsAppProvider({ baseUrl: process.env.META_GRAPH_BASE_URL ?? "", accessToken: process.env.META_WHATSAPP_ACCESS_TOKEN ?? "", phoneNumberId: process.env.META_WHATSAPP_PHONE_NUMBER_ID ?? "", appSecret: process.env.META_APP_SECRET }) : new MockMessagingProvider();

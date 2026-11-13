@@ -6,7 +6,7 @@ import { assertDemoSeedAllowed } from "./seed-safety.js";
 assertDemoSeedAllowed();
 const { db, client } = createDatabase();
 const state = createSeedState();
-const passwordHash = hashPassword("local-only");
+const passwordHash = hashPassword("12345678");
 const colorByTag: Record<string, string> = { "Lead qualificado": "teal", Instagram: "pink", "Plano Pro": "violet", Cliente: "green", Suporte: "blue", Demonstração: "amber", API: "blue", WebChat: "teal", Financeiro: "slate" };
 
 try {

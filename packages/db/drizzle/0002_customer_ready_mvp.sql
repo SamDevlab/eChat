@@ -3,6 +3,7 @@ ALTER TABLE organizations ADD COLUMN IF NOT EXISTS onboarding_step text NOT NULL
 ALTER TABLE organizations ADD COLUMN IF NOT EXISTS onboarding_completed boolean NOT NULL DEFAULT false;
 
 ALTER TABLE channels ADD COLUMN IF NOT EXISTS integration_account_id text;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS department_id text;
 
 ALTER TABLE integration_accounts ADD COLUMN IF NOT EXISTS display_name text NOT NULL DEFAULT 'Integração';
 ALTER TABLE integration_accounts ADD COLUMN IF NOT EXISTS credential_ciphertext text;

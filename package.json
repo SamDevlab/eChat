@@ -2,10 +2,7 @@
   "name": "echat",
   "private": true,
   "version": "0.1.0",
-  "workspaces": [
-    "apps/*",
-    "packages/*"
-  ],
+  "workspaces": ["apps/*", "packages/*"],
   "scripts": {
     "dev": "npm run build --workspace @echat/shared && npm run build --workspace @echat/db && concurrently -k \"npm run dev:api\" \"npm run dev:web\"",
     "dev:api": "npm --workspace @echat/api run dev",
@@ -16,16 +13,14 @@
     "db:seed": "npm run build --workspace @echat/shared && npm run build --workspace @echat/db && npm --workspace @echat/api run db:seed",
     "db:generate": "npm --workspace @echat/db run generate",
     "db:migrate": "npm run build --workspace @echat/shared && npm run build --workspace @echat/db && npm --workspace @echat/api run db:migrate",
-    "test:integration": "vitest run apps/api/src/integration.test.ts apps/api/src/customer_ready.test.ts",
-    "test:live": "npm --workspace @echat/api run test:live",
-    "qualify:chatwoot": "npm --workspace @echat/api run qualify:chatwoot"
+    "test:integration": "vitest run apps/api/src/integration.test.ts apps/api/src/customer_ready.test.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "concurrently": "^9.1.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
-    "vitest": "^4.1.11"
+    "vitest": "^2.1.8"
   },
   "engines": {
     "node": ">=20"
